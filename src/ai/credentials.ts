@@ -5,20 +5,21 @@ export type Credential =
   | { mode: "api"; source: string; key: string; auth: "apiKey" | "authToken" }
   | { mode: "none"; source: string };
 
+/** Env vars checked in order, before falling back to the config file. */
+const ENV_CREDENTIALS: Record<ProviderName, [name: string, auth: "apiKey" | "authToken"][]> = {
+  claude: [
+    ["ANTHROPIC_API_KEY", "apiKey"],
+    ["ANTHROPIC_AUTH_TOKEN", "authToken"],
+  ],
+  codex: [["OPENAI_API_KEY", "apiKey"]],
+};
+
 export function resolve(provider: ProviderName): Credential {
-  if (provider === "claude") {
-    const apiKey = process.env["ANTHROPIC_API_KEY"];
-    if (apiKey) return { mode: "api", source: "ANTHROPIC_API_KEY env", key: apiKey, auth: "apiKey" };
-    const token = process.env["ANTHROPIC_AUTH_TOKEN"];
-    if (token)
-      return { mode: "api", source: "ANTHROPIC_AUTH_TOKEN env", key: token, auth: "authToken" };
-    const stored = storedKey("claude");
-    if (stored) return { mode: "api", source: "config file", key: stored, auth: "apiKey" };
-    return { mode: "none", source: "not configured" };
+  for (const [name, auth] of ENV_CREDENTIALS[provider]) {
+    const key = process.env[name];
+    if (key) return { mode: "api", source: `${name} env`, key, auth };
   }
-  const apiKey = process.env["OPENAI_API_KEY"];
-  if (apiKey) return { mode: "api", source: "OPENAI_API_KEY env", key: apiKey, auth: "apiKey" };
-  const stored = storedKey("codex");
+  const stored = storedKey(provider);
   if (stored) return { mode: "api", source: "config file", key: stored, auth: "apiKey" };
   return { mode: "none", source: "not configured" };
 }

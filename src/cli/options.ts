@@ -60,10 +60,11 @@ export function parseScoreParams(values: ReportOptions): ScoreParams {
   // Canonicalized, not echoed: the accepted spelling is case-insensitive but
   // `params.metric` is part of the stable JSON schema, so `--metric FLIPRATE`
   // must not put "FLIPRATE" in it.
-  const metric = (
-    raw.toLowerCase() === "fliprate" ? "flipRate" : raw.toLowerCase() === "entropy" ? "entropy" : null
-  ) as Metric | null;
-  if (metric === null) throw new InputError(`--metric must be flipRate or entropy, got "${raw}"`);
+  const lower = raw.toLowerCase();
+  if (lower !== "fliprate" && lower !== "entropy") {
+    throw new InputError(`--metric must be flipRate or entropy, got "${raw}"`);
+  }
+  const metric: Metric = lower === "entropy" ? "entropy" : "flipRate";
   const model = (values.model ?? "weighted") as Model;
   if (model !== "weighted" && model !== "unweighted") {
     throw new InputError(`--model must be weighted or unweighted, got "${model}"`);

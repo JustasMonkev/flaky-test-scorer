@@ -124,7 +124,7 @@ export function verdict(score: number): Verdict {
   return "very_flaky";
 }
 
-type TimestampKey = [number, number, string];
+export type TimestampKey = [number, number, string];
 
 const NUMERIC = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 const ISO_LIKE = /^\d{4}-\d{2}-\d{2}/;
@@ -146,7 +146,7 @@ export function timestampKey(value: string | number | null | undefined): Timesta
   return [2, 0, text];
 }
 
-function compareKeys(a: TimestampKey, b: TimestampKey): number {
+export function compareKeys(a: TimestampKey, b: TimestampKey): number {
   if (a[0] !== b[0]) return a[0] - b[0];
   if (a[1] !== b[1]) return a[1] - b[1];
   return a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0;

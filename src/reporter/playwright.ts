@@ -124,7 +124,7 @@ export default class FlakyHistoryReporter {
     // runs. Dropped again for tests that never retried, so their history lines
     // keep the v1 record shape.
     const retried = new Set(
-      this.pending.filter((run) => (run.attempt ?? 0) > 0).map((run) => run.test_id),
+      this.pending.filter((run) => run.attempt > 0).map((run) => run.test_id),
     );
     const runs = this.pending.map(({ attempt, ...run }) =>
       retried.has(run.test_id) ? { ...run, version, attempt } : { ...run, version },

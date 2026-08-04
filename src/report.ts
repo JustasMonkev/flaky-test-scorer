@@ -51,6 +51,10 @@ export function buildReport(
 
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
 
+/** "N tests show flakiness (M very flaky), K tests need more data." */
+const flakinessSummary = (s: Report["summary"]): string =>
+  `${plural(s.flaky, "test")} show${s.flaky === 1 ? "s" : ""} flakiness (${s.very_flaky} very flaky), ${plural(s.low_data, "test")} need${s.low_data === 1 ? "s" : ""} more data.`;
+
 /**
  * The flaky tests in display order: newly-flaky first, baselined after, stable
  * within each group. Every surface slices a top-N off this list, and a repo with
@@ -72,15 +76,13 @@ function evidenceLines(test: ReportTest): string[] {
   const { transitions, within_version_flips, within_run_retries, duration_variance, failure_clusters } =
     test.evidence;
   lines.push(
-    `${transitions.flips} outcome flip${transitions.flips === 1 ? "" : "s"} in ${transitions.total_runs} runs across ${test.num_versions} version${test.num_versions === 1 ? "" : "s"}`,
+    `${plural(transitions.flips, "outcome flip")} in ${transitions.total_runs} runs across ${plural(test.num_versions, "version")}`,
   );
   if (within_version_flips > 0) {
-    lines.push(`fails on unchanged commit in ${within_version_flips} version${within_version_flips === 1 ? "" : "s"}`);
+    lines.push(`fails on unchanged commit in ${plural(within_version_flips, "version")}`);
   }
   if (within_run_retries > 0) {
-    lines.push(
-      `passed only on retry in ${within_run_retries} run${within_run_retries === 1 ? "" : "s"} (within-run retries)`,
-    );
+    lines.push(`passed only on retry in ${plural(within_run_retries, "run")} (within-run retries)`);
   }
   if (duration_variance && duration_variance.ratio >= 2) {
     lines.push(`duration variance ${duration_variance.ratio.toFixed(1)}x suite median`);
@@ -100,7 +102,7 @@ export function renderHuman(
   const { summary } = report;
   const out: string[] = [
     `Analyzed ${plural(summary.runs, "run")} across ${plural(summary.tests, "test")} from ${plural(fileCount, "file")}.`,
-    `${plural(summary.flaky, "test")} show${summary.flaky === 1 ? "s" : ""} flakiness (${summary.very_flaky} very flaky), ${plural(summary.low_data, "test")} need${summary.low_data === 1 ? "s" : ""} more data.`,
+    flakinessSummary(summary),
   ];
 
   const flaky = flakyRanked(report, baseline);
@@ -248,7 +250,7 @@ export function renderGithub(
   const markdown = [
     "## Flaky test report",
     "",
-    `Scored ${plural(report.summary.tests, "test")} over ${plural(report.summary.runs, "run")}. ${plural(report.summary.flaky, "test")} show${report.summary.flaky === 1 ? "s" : ""} flakiness (${report.summary.very_flaky} very flaky), ${plural(report.summary.low_data, "test")} need${report.summary.low_data === 1 ? "s" : ""} more data.`,
+    `Scored ${plural(report.summary.tests, "test")} over ${plural(report.summary.runs, "run")}. ${flakinessSummary(report.summary)}`,
     ...(baseline ? ["", `${flaky.length - known} newly flaky, ${known} baselined (known flaky).`] : []),
     "",
     ...(rows.length

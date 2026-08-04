@@ -109,11 +109,11 @@ export async function runReport(
   const explainTop = Math.max(0, numberOption(values.explainTop, "explain-top", 3));
   // Silently ignored flags read as "it ran and found nothing worth explaining".
   if (!values.explain) {
-    for (const flag of ["provider", "explain-top"] as const) {
-      const given = flag === "provider" ? values.provider : values.explainTop;
-      if (given !== undefined) {
-        process.stderr.write(`warning: --${flag} has no effect without --explain\n`);
-      }
+    if (values.provider !== undefined) {
+      process.stderr.write("warning: --provider has no effect without --explain\n");
+    }
+    if (values.explainTop !== undefined) {
+      process.stderr.write("warning: --explain-top has no effect without --explain\n");
     }
   }
   if (command === "ci" && failAbove === null) {
@@ -122,19 +122,15 @@ export async function runReport(
     );
   }
   if (command === "analyze") {
-    // Both are ci-only. Accepting them silently made `analyze --fail-above` a
-    // permanently green CI gate.
-    for (const [flag, value] of [
-      ["fail-above", values.failAbove],
-      // `--format markdown` is a rendering choice, not a CI gate — SPEC-V3 F7
-      // puts it on both commands. `--format github` stays ci-only.
-      ["format", values.format === "markdown" ? undefined : values.format],
-      ["baseline", values.baseline],
-    ] as const) {
-      if (value !== undefined) {
-        throw new InputError(`--${flag} is only supported by the "ci" command; use "ci" instead of "analyze"`);
-      }
-    }
+    // These are ci-only; accepting them silently made `analyze --fail-above` a
+    // permanently green CI gate. `--format markdown` is a rendering choice, not a
+    // CI gate — SPEC-V3 F7 puts it on both commands. `--format github` stays ci-only.
+    const ciOnly = (flag: string): never => {
+      throw new InputError(`--${flag} is only supported by the "ci" command; use "ci" instead of "analyze"`);
+    };
+    if (values.failAbove !== undefined) ciOnly("fail-above");
+    if (values.format !== undefined && values.format !== "markdown") ciOnly("format");
+    if (values.baseline !== undefined) ciOnly("baseline");
   }
   // A missing baseline file is an empty baseline (first run in a fresh repo); a
   // corrupt one is an input error, because silently gating on nothing is worse.

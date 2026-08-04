@@ -91,14 +91,11 @@ const PATTERNS: [CauseCategory, RegExp[]][] = KEYWORDS.map(([category, keywords]
 
 export function classify(messages: string[]): LikelyCause {
   const counts = new Map<CauseCategory, number>();
-  let classified = 0;
   for (const message of messages) {
     const text = message.toLowerCase();
     for (const [category, patterns] of PATTERNS) {
-      const matched = patterns.filter((re) => re.test(text)).length;
-      if (matched > 0) {
+      if (patterns.some((re) => re.test(text))) {
         counts.set(category, (counts.get(category) ?? 0) + 1);
-        classified++;
         break; // first matching category owns the message
       }
     }
@@ -114,7 +111,7 @@ export function classify(messages: string[]): LikelyCause {
     }
   }
 
-  const dominance = classified > 0 ? bestCount / messages.length : 0;
+  const dominance = bestCount > 0 ? bestCount / messages.length : 0;
   const confidence =
     bestCount >= 3 && dominance >= 0.7 ? "high" : bestCount >= 2 && dominance >= 0.5 ? "medium" : "low";
 

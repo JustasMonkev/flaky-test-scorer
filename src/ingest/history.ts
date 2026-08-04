@@ -1,6 +1,6 @@
 import { closeSync, existsSync, openSync, readFileSync, writeSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
-import { timestampKey, type RunRecord } from "../score.js";
+import { compareKeys, timestampKey, type RunRecord } from "../score.js";
 import { InputError, stripBom, writeAtomic } from "./common.js";
 import { runsFromRows } from "./rows.js";
 
@@ -137,13 +137,7 @@ export function appendHistory(path: string, existing: RunRecord[], incoming: Run
 export function chronological(runs: RunRecord[]): RunRecord[] {
   return runs
     .map((run, order) => ({ run, order, key: timestampKey(run.timestamp) }))
-    .sort(
-      (a, b) =>
-        a.key[0] - b.key[0] ||
-        a.key[1] - b.key[1] ||
-        (a.key[2] < b.key[2] ? -1 : a.key[2] > b.key[2] ? 1 : 0) ||
-        a.order - b.order,
-    )
+    .sort((a, b) => compareKeys(a.key, b.key) || a.order - b.order)
     .map((d) => d.run);
 }
 

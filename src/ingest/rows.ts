@@ -67,6 +67,7 @@ export function runsFromRows(
     const timestamp = firstValue(row, ["timestamp", "time", "date"]);
     const failureMessage = firstValue(row, ["failure_message", "message", "error"]);
     const sourceFile = row["source_file"];
+    const attempt = numberOrNull(row["attempt"]);
     runs.push({
       test_id: cleanId,
       result,
@@ -76,7 +77,7 @@ export function runsFromRows(
       failure_message: typeof failureMessage === "string" ? failureMessage : null,
       source_file: typeof sourceFile === "string" ? sourceFile : file,
       // Kept only when present, so v1 history lines round-trip byte-identically.
-      ...(numberOrNull(row["attempt"]) === null ? {} : { attempt: numberOrNull(row["attempt"]) }),
+      ...(attempt === null ? {} : { attempt }),
     });
   }
   return runs;
