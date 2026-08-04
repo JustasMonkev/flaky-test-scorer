@@ -1,0 +1,57 @@
+{
+  "name": "flaky-test-scorer",
+  "version": "1.0.0",
+  "description": "Detect and rank flaky tests from test-run history, with deterministic evidence and agent-ready JSON.",
+  "keywords": [
+    "flaky",
+    "tests",
+    "junit",
+    "ci",
+    "flakiness",
+    "test-analytics"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "flaky-test-scorer": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./reporter/playwright": {
+      "types": "./dist/reporter/playwright.d.ts",
+      "default": "./dist/reporter/playwright.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.js.map",
+    "action.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc && chmod +x dist/cli.js",
+    "pretest": "npm run build",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "commander": "^15.0.0",
+    "fast-xml-parser": "^4.5.3",
+    "openai": "^7.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.9"
+  }
+}

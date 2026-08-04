@@ -1,0 +1,4 @@
+<testsuites>
+  <testsuite name="broken">
+    <testcase name="unclosed">
+</testsuites>

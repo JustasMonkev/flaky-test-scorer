@@ -1,0 +1,14 @@
+﻿<testsuites name="root">
+  <testsuite name="outer" timestamp="2024-05-01T09:00:00">
+    <testsuite name="inner">
+      <testcase classname="pkg.Inner" name="deep pass" time="0.1"/>
+      <testcase classname="pkg.Inner" name="deep error">
+        <error message="ECONNREFUSED 127.0.0.1:5432" type="DbError">at connect()</error>
+      </testcase>
+    </testsuite>
+    <testcase name="no classname"/>
+    <testcase classname="pkg.Outer" name="skipped one"><skipped/></testcase>
+    <testcase classname="pkg.Outer" name="bare failure"><failure/></testcase>
+  </testsuite>
+  <testsuite name="empty"/>
+</testsuites>

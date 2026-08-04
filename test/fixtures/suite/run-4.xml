@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="checkout" timestamp="2024-05-01T13:00:00">
+    <testcase classname="checkout" name="applies promo code" time="13.1">
+      <failure message="Timeout 30000ms exceeded waiting for selector #promo">at /app/tests/checkout.spec.ts:41</failure>
+    </testcase>
+    <testcase classname="checkout" name="renders cart" time="0.5"/>
+    <testcase classname="checkout" name="syncs inventory" time="1.2">
+      <failure message="Timeout 5000ms exceeded while waiting for network idle">at /app/tests/inventory.spec.ts:12</failure>
+    </testcase>
+  </testsuite>
+</testsuites>

@@ -1,0 +1,7 @@
+{"runs":[
+  {"testId":"api.search","outcome":"1","version":"v1","date":1714557600,"failure_message":null},
+  {"testId":"api.search","outcome":"0","version":"v1","date":1714561200,"failure_message":"socket hang up"},
+  {"testId":"api.search","outcome":"true","version":"v2","date":1714564800},
+  {"id":"0","result":false,"version":"v2","timestamp":1714568400},
+  {"name":"no result field","version":"v2"}
+]}

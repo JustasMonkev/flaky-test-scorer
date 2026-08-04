@@ -1,0 +1,8 @@
+test,status,version,time,duration
+login_flow,PASSED,abc123,2024-05-01T10:00:00Z,1.2
+login_flow,failed,abc123,2024-05-01T11:00:00Z,9.4
+login_flow,ok,abc123,2024-05-01T12:00:00Z,1.1
+stable_test,pass,abc123,2024-05-01T10:00:00Z,0.5
+stable_test,pass,abc123,2024-05-01T11:00:00Z,0.5
+"weird, quoted ""test""",green,abc123,2024-05-01T10:00:00Z,0.1
+skip_me,skipped,abc123,2024-05-01T10:00:00Z,0.1

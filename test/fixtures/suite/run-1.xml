@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="checkout" timestamp="2024-05-01T10:00:00">
+    <testcase classname="checkout" name="applies promo code" time="0.4"/>
+    <testcase classname="checkout" name="renders cart" time="0.5"/>
+    <testcase classname="checkout" name="syncs inventory" time="1.0"/>
+  </testsuite>
+</testsuites>

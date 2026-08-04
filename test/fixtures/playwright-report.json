@@ -1,0 +1,73 @@
+{
+  "config": { "version": "1.49.0" },
+  "suites": [
+    {
+      "title": "tests/checkout.spec.ts",
+      "file": "tests/checkout.spec.ts",
+      "specs": [],
+      "suites": [
+        {
+          "title": "checkout",
+          "file": "tests/checkout.spec.ts",
+          "specs": [
+            {
+              "title": "applies promo code",
+              "tests": [
+                {
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "retry": 0,
+                      "status": "failed",
+                      "duration": 5001,
+                      "startTime": "2024-05-01T10:00:00.000Z",
+                      "error": { "message": "Timeout 5000ms exceeded waiting for locator('#promo')" }
+                    },
+                    {
+                      "retry": 1,
+                      "status": "passed",
+                      "duration": 900,
+                      "startTime": "2024-05-01T10:00:06.000Z"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "never runs",
+              "tests": [
+                {
+                  "projectName": "chromium",
+                  "results": [{ "retry": 0, "status": "skipped", "duration": 0 }]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "tests/login.spec.ts",
+      "file": "tests/login.spec.ts",
+      "specs": [
+        {
+          "title": "logs in",
+          "tests": [
+            {
+              "projectName": "firefox",
+              "results": [
+                {
+                  "retry": 0,
+                  "status": "passed",
+                  "duration": 1200,
+                  "startTime": "2024-05-01T10:01:00.000Z"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "suites": []
+    }
+  ]
+}

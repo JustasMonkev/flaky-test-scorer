@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.FlakyIT" tests="3" timestamp="2024-05-01T10:00:00">
+  <testcase name="flakyOne" classname="com.example.FlakyIT" time="1.5">
+    <flakyFailure message="Timeout 5000 ms exceeded while waiting for db" type="java.lang.AssertionError">first attempt stack</flakyFailure>
+    <flakyFailure message="Timeout 5000 ms exceeded while waiting for db" type="java.lang.AssertionError">second attempt stack</flakyFailure>
+  </testcase>
+  <testcase name="alwaysFails" classname="com.example.FlakyIT" time="0.5">
+    <failure message="connection refused to db" type="java.net.ConnectException">boom</failure>
+    <rerunFailure message="connection refused to db" type="java.net.ConnectException">boom again</rerunFailure>
+  </testcase>
+  <testcase name="stable" classname="com.example.FlakyIT" time="0.2"/>
+</testsuite>

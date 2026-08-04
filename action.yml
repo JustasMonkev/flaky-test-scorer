@@ -1,0 +1,125 @@
+name: Flaky Test Scorer
+description: Score and rank flaky tests from JUnit XML, with a persistent run history cached between CI runs.
+author: flaky-test-scorer
+
+inputs:
+  input:
+    description: Path, directory or glob of test artifacts to ingest (JUnit XML, JSON or CSV).
+    required: false
+    default: "**/junit*.xml"
+  fail-above:
+    description: Fail the job when any test's lower_bound_score exceeds this value. Empty = never fail.
+    required: false
+    default: ""
+  history:
+    description: Path to the JSONL history file that accumulates runs across CI runs.
+    required: false
+    default: .flaky-history.jsonl
+  version:
+    description: npm version/tag of flaky-test-scorer to run.
+    required: false
+    default: latest
+  extra-args:
+    description: >
+      Extra CLI flags, e.g. "--metric entropy --lam 0.05". Forwarded to BOTH the
+      gate step and the PR-comment step, so do not put --json, --format or
+      --fail-above here: --fail-above would turn the comment step into a second
+      gate, and --json conflicts with the comment step's --format markdown and
+      fails it. Use the dedicated fail-above input instead.
+    required: false
+    default: ""
+  explain:
+    description: |
+      Set to "true" to add an AI explanation section. Needs a provider credential
+      in the job environment (ANTHROPIC_API_KEY or OPENAI_API_KEY from your
+      secrets) — there is deliberately no key input, keys never travel through
+      action inputs. An explain failure only warns; it never changes the exit code.
+    required: false
+    default: "false"
+  provider:
+    description: AI provider for --explain, "claude" or "codex". Empty = first available.
+    required: false
+    default: ""
+  pr-comment:
+    description: |
+      Set to "true" to upsert a sticky flakiness comment on the pull request.
+      Only runs on pull_request events. The calling workflow must grant
+      `permissions: pull-requests: write` — the comment is posted with the
+      workflow's own GITHUB_TOKEN, this action takes no token input.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Restore flaky-test history
+      uses: actions/cache@v4
+      with:
+        path: ${{ inputs.history }}
+        key: flaky-test-history-${{ github.ref_name }}-${{ github.run_id }}
+        restore-keys: |
+          flaky-test-history-${{ github.ref_name }}-
+          flaky-test-history-
+
+    - name: Score flaky tests
+      shell: bash
+      # Inputs travel as env vars, never as ${{ }} spliced into the shell line:
+      # a value containing `; rm -rf /` would otherwise run as a command.
+      env:
+        FTS_VERSION: ${{ inputs.version }}
+        FTS_INPUT: ${{ inputs.input }}
+        FTS_HISTORY: ${{ inputs.history }}
+        FTS_FAIL_ABOVE: ${{ inputs.fail-above }}
+        FTS_EXTRA_ARGS: ${{ inputs.extra-args }}
+        FTS_EXPLAIN: ${{ inputs.explain }}
+        FTS_PROVIDER: ${{ inputs.provider }}
+      # ANTHROPIC_API_KEY / OPENAI_API_KEY are read straight from the job env,
+      # so the key never becomes an action input or a command-line argument.
+      run: |
+        EXPLAIN=""
+        if [ "$FTS_EXPLAIN" = "true" ]; then EXPLAIN="--explain"; fi
+        npx --yes "flaky-test-scorer@$FTS_VERSION" ci "$FTS_INPUT" \
+          --history "$FTS_HISTORY" \
+          --format github \
+          $EXPLAIN \
+          ${FTS_PROVIDER:+--provider "$FTS_PROVIDER"} \
+          ${FTS_FAIL_ABOVE:+--fail-above "$FTS_FAIL_ABOVE"} \
+          $FTS_EXTRA_ARGS
+
+    # Runs even when the gate step above failed — a PR that just went red is
+    # exactly when the comment is worth having. No --fail-above here, so this
+    # step never becomes a second gate.
+    - name: Upsert flaky test PR comment
+      if: ${{ always() && inputs.pr-comment == 'true' && github.event_name == 'pull_request' }}
+      shell: bash
+      env:
+        FTS_VERSION: ${{ inputs.version }}
+        FTS_INPUT: ${{ inputs.input }}
+        FTS_HISTORY: ${{ inputs.history }}
+        FTS_EXTRA_ARGS: ${{ inputs.extra-args }}
+        # Needs `permissions: pull-requests: write` in the calling workflow.
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+        BODY="$RUNNER_TEMP/flaky-comment.md"
+        npx --yes "flaky-test-scorer@$FTS_VERSION" ci "$FTS_INPUT" \
+          --history "$FTS_HISTORY" \
+          --format markdown \
+          $FTS_EXTRA_ARGS > "$BODY"
+        # The marker on line 1 of the body is how an existing comment is found,
+        # so repeated pushes edit one comment instead of stacking new ones.
+        # No `| head -1` here: under `pipefail` the early close SIGPIPEs gh and
+        # kills the step, so the first line is taken with shell expansion instead.
+        IDS=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
+          --jq '.[] | select(.body | contains("<!-- flaky-test-scorer -->")) | .id')
+        ID=${IDS%%$'\n'*}
+        # A fork or Dependabot PR gets a read-only token, so the write 403s. That
+        # is a warning, not a red build: the gate step is the gate.
+        NOTE="::warning::flaky-test-scorer could not post the PR comment — grant \`pull-requests: write\` (fork PRs always get a read-only token)"
+        if [ -n "$ID" ]; then
+          gh api --method PATCH "repos/$REPO/issues/comments/$ID" -F body=@"$BODY" --silent || echo "$NOTE"
+        else
+          gh api --method POST "repos/$REPO/issues/$PR_NUMBER/comments" -F body=@"$BODY" --silent || echo "$NOTE"
+        fi
