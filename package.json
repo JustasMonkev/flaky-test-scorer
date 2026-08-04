@@ -1,6 +1,7 @@
 {
   "name": "flaky-test-scorer",
-  "version": "1.0.0",
+  "version": "1.0.1",
+  "homepage": "https://github.com/JustasMonkev/flaky-test-scorer",
   "description": "Detect and rank flaky tests from test-run history, with deterministic evidence and agent-ready JSON.",
   "keywords": [
     "flaky",
