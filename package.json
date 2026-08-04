@@ -1,6 +1,6 @@
 {
   "name": "flaky-test-scorer",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "homepage": "https://github.com/JustasMonkev/flaky-test-scorer",
   "description": "Detect and rank flaky tests from test-run history, with deterministic evidence and agent-ready JSON.",
   "keywords": [
@@ -14,7 +14,7 @@
   "license": "MIT",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=25"
   },
   "bin": {
     "flaky-test-scorer": "dist/cli.js"
@@ -47,12 +47,12 @@
     "@anthropic-ai/sdk": "^0.115.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "commander": "^15.0.0",
-    "fast-xml-parser": "^4.5.3",
+    "fast-xml-parser": "^5.10.1",
     "openai": "^7.4.0"
   },
   "devDependencies": {
-    "@types/node": "^20.19.0",
-    "typescript": "^5.7.3",
-    "vitest": "^2.1.9"
+    "@types/node": "^26.1.2",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   }
 }

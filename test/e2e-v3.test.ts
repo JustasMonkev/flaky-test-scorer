@@ -229,6 +229,7 @@ describe("mcp subcommand over real stdio", () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [cli, "mcp"],
+      cwd: work,
       env: { PATH: process.env["PATH"] ?? "" },
       stderr: "pipe",
     });
