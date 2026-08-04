@@ -521,7 +521,3 @@ instability is separated from cross-commit change.
 Quarantine/auto-modification of test files, trend dashboards, SQLite, watch mode,
 GitLab MR comments (the recipe above writes an artifact instead). The JSON schema
 is the extension point for all of them.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
