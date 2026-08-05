@@ -44,10 +44,31 @@ export function parseCsv(text: string): Record<string, string>[] {
     .map((r) => Object.fromEntries(header.map((key, i) => [key.trim(), r[i] ?? ""])));
 }
 
+const TEST_ID_KEYS = ["test_id", "test", "name", "testId", "id"];
+const RESULT_KEYS = ["result", "status", "outcome"];
+const TIMESTAMP_KEYS = ["timestamp", "time", "date"];
+const DURATION_KEYS = ["duration_s", "duration", "elapsed"];
+const MESSAGE_KEYS = ["failure_message", "message", "error"];
+
+/**
+ * Every key `runsFromRows` consumes. Anything else on a history line is a field
+ * this version does not know about and must survive a merge/prune rewrite untouched.
+ */
+export const CONSUMED_ROW_KEYS: ReadonlySet<string> = new Set([
+  ...TEST_ID_KEYS,
+  ...RESULT_KEYS,
+  "version",
+  ...TIMESTAMP_KEYS,
+  ...DURATION_KEYS,
+  ...MESSAGE_KEYS,
+  "source_file",
+  "attempt",
+]);
+
 /** Normalize alias-bearing row objects (from JSON or CSV) into runs. */
 export function runsFromRows(
   rows: unknown[],
-  file: string,
+  fallbackFile: string | null,
   fallbackVersion: string | null,
 ): RunRecord[] {
   const runs: RunRecord[] = [];
@@ -55,8 +76,8 @@ export function runsFromRows(
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
     const row = raw as Record<string, unknown>;
 
-    const testId = firstValue(row, ["test_id", "test", "name", "testId", "id"]);
-    const resultRaw = firstValue(row, ["result", "status", "outcome"]);
+    const testId = firstValue(row, TEST_ID_KEYS);
+    const resultRaw = firstValue(row, RESULT_KEYS);
     if (testId === null || resultRaw === null) continue;
     const result = normalizeResult(resultRaw);
     if (result === null) continue;
@@ -64,19 +85,20 @@ export function runsFromRows(
     if (cleanId === "") continue;
 
     const version = firstValue(row, ["version"]);
-    const timestamp = firstValue(row, ["timestamp", "time", "date"]);
-    const failureMessage = firstValue(row, ["failure_message", "message", "error"]);
+    const timestamp = firstValue(row, TIMESTAMP_KEYS);
+    const failureMessage = firstValue(row, MESSAGE_KEYS);
     const sourceFile = row["source_file"];
+    const attempt = numberOrNull(row["attempt"]);
     runs.push({
       test_id: cleanId,
       result,
       version: version === null ? fallbackVersion : String(version),
       timestamp: typeof timestamp === "string" || typeof timestamp === "number" ? timestamp : null,
-      duration_s: numberOrNull(firstValue(row, ["duration_s", "duration", "elapsed"])),
+      duration_s: numberOrNull(firstValue(row, DURATION_KEYS)),
       failure_message: typeof failureMessage === "string" ? failureMessage : null,
-      source_file: typeof sourceFile === "string" ? sourceFile : file,
+      source_file: typeof sourceFile === "string" ? sourceFile : fallbackFile,
       // Kept only when present, so v1 history lines round-trip byte-identically.
-      ...(numberOrNull(row["attempt"]) === null ? {} : { attempt: numberOrNull(row["attempt"]) }),
+      ...(attempt === null ? {} : { attempt }),
     });
   }
   return runs;

@@ -10,10 +10,10 @@ import {
   type CallToolResult,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import { autoSelectProvider, explain, type ProviderName } from "../ai/index.js";
+import { explain, requireProvider, type ProviderName } from "../ai/index.js";
 import { InputError, dedupAgainst, detectCommit, expandInputs, loadRuns, readHistory } from "../ingest.js";
 import { buildReport, type Report, type ReportTest } from "../report.js";
-import { groupByTestAndVersion, type RunRecord } from "../score.js";
+import { SCORE_DEFAULTS, groupByTestAndVersion, type RunRecord } from "../score.js";
 
 // Resolves to the package root from both src/mcp/ (vitest) and dist/mcp/ (published).
 const { version } = JSON.parse(
@@ -94,10 +94,10 @@ function analyzeHistory(args: Args): Report {
     throw new InputError(`no usable test runs found in ${historyPath ?? inputs.join(", ")}`);
   }
   return buildReport(groupByTestAndVersion(runs), {
-    metric: optEnum(args, "metric", ["flipRate", "entropy"] as const, "flipRate"),
-    model: optEnum(args, "model", ["weighted", "unweighted"] as const, "weighted"),
-    lam: optNumber(args, "lam", 0.1, (n) => n > 0 && n <= 1, "a number in the range (0, 1]"),
-    minReruns: optNumber(args, "min_reruns", 2, (n) => n >= 1, "a number >= 1"),
+    metric: optEnum(args, "metric", ["flipRate", "entropy"] as const, SCORE_DEFAULTS.metric),
+    model: optEnum(args, "model", ["weighted", "unweighted"] as const, SCORE_DEFAULTS.model),
+    lam: optNumber(args, "lam", SCORE_DEFAULTS.lam, (n) => n > 0 && n <= 1, "a number in the range (0, 1]"),
+    minReruns: optNumber(args, "min_reruns", SCORE_DEFAULTS.minReruns, (n) => n >= 1, "a number >= 1"),
   });
 }
 
@@ -118,14 +118,7 @@ function getTestEvidence(args: Args): ReportTest {
 async function explainTest(args: Args): Promise<unknown> {
   const test = getTestEvidence(args);
   const requested = optEnum(args, "provider", ["claude", "codex", "auto"] as const, "auto");
-  const provider: ProviderName | null =
-    requested === "auto" ? autoSelectProvider() : requested;
-  if (provider === null) {
-    throw new InputError(
-      "no AI provider configured — set ANTHROPIC_API_KEY or OPENAI_API_KEY, run " +
-        "`flaky-test-scorer auth set-key <provider>`",
-    );
-  }
+  const provider: ProviderName = requireProvider(requested === "auto" ? undefined : requested);
   const result = await explain(provider, { tests: [test] });
   return {
     test_id: test.test_id,
@@ -137,6 +130,21 @@ async function explainTest(args: Args): Promise<unknown> {
 }
 
 // ------------------------------------------------------------------- the server
+
+const HISTORY_PATH_PROP = {
+  history_path: { type: "string", description: "Path to a JSONL history file (read-only)." },
+} as const;
+
+const TEST_ID_PROP = {
+  test_id: { type: "string", description: "Exact test id as reported by analyze_history." },
+} as const;
+
+const SCORE_PROPS = {
+  metric: { type: "string", enum: ["flipRate", "entropy"], description: "Default flipRate." },
+  model: { type: "string", enum: ["weighted", "unweighted"], description: "Default weighted." },
+  lam: { type: "number", description: "EWMA decay in (0, 1], default 0.1." },
+  min_reruns: { type: "number", description: "Below this run count a test is low_data, default 2." },
+} as const;
 
 const TOOLS: Tool[] = [
   {
@@ -152,16 +160,13 @@ const TOOLS: Tool[] = [
     inputSchema: {
       type: "object",
       properties: {
-        history_path: { type: "string", description: "Path to a JSONL history file (read-only)." },
+        ...HISTORY_PATH_PROP,
         inputs: {
           type: "array",
           items: { type: "string" },
           description: "JUnit XML / JSON / CSV files, directories or simple globs to score.",
         },
-        metric: { type: "string", enum: ["flipRate", "entropy"], description: "Default flipRate." },
-        model: { type: "string", enum: ["weighted", "unweighted"], description: "Default weighted." },
-        lam: { type: "number", description: "EWMA decay in (0, 1], default 0.1." },
-        min_reruns: { type: "number", description: "Below this run count a test is low_data, default 2." },
+        ...SCORE_PROPS,
       },
     },
   },
@@ -177,14 +182,7 @@ const TOOLS: Tool[] = [
       "It returns nothing about any other test, no raw run rows and no AI explanation.",
     inputSchema: {
       type: "object",
-      properties: {
-        history_path: { type: "string", description: "Path to a JSONL history file (read-only)." },
-        test_id: { type: "string", description: "Exact test id as reported by analyze_history." },
-        metric: { type: "string", enum: ["flipRate", "entropy"], description: "Default flipRate." },
-        model: { type: "string", enum: ["weighted", "unweighted"], description: "Default weighted." },
-        lam: { type: "number", description: "EWMA decay in (0, 1], default 0.1." },
-        min_reruns: { type: "number", description: "Below this run count a test is low_data, default 2." },
-      },
+      properties: { ...HISTORY_PATH_PROP, ...TEST_ID_PROP, ...SCORE_PROPS },
       required: ["history_path", "test_id"],
     },
   },
@@ -201,8 +199,8 @@ const TOOLS: Tool[] = [
     inputSchema: {
       type: "object",
       properties: {
-        history_path: { type: "string", description: "Path to a JSONL history file (read-only)." },
-        test_id: { type: "string", description: "Exact test id as reported by analyze_history." },
+        ...HISTORY_PATH_PROP,
+        ...TEST_ID_PROP,
         provider: {
           type: "string",
           enum: ["claude", "codex", "auto"],

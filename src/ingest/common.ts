@@ -1,4 +1,5 @@
 import { renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { relative, sep } from "node:path";
 
 /** Usage / input error — the CLI maps this to exit code 2. */
 export class InputError extends Error {}
@@ -41,6 +42,27 @@ export const stripBom = (text: string) => (text.charCodeAt(0) === 0xfeff ? text.
  */
 export const cleanTestId = (raw: string): string =>
   raw.replace(/[\p{Cc}\p{Cf}\u2028\u2029]+/gu, " ").trim();
+
+/**
+ * Path relative to `base` (default cwd) with posix separators. This IS the dedup
+ * identity for `source_file`: storage (load), comparison (history) and glob
+ * matching must all use the same formula or the double-counting bug returns.
+ */
+export const relPosix = (file: string, base = process.cwd()): string =>
+  relative(base, file).split(sep).join("/");
+
+/**
+ * The one test-id format: non-empty parts joined with " > ", control characters
+ * collapsed. Every producer (JUnit, Playwright JSON, the reporter) must build ids
+ * through this so one history can hold runs from all of them.
+ */
+export const joinTestId = (parts: (string | null | undefined)[]): string =>
+  cleanTestId(parts.filter(Boolean).join(" > "));
+
+/** The corrupt-history warning every reader owes its caller (SPEC.md). */
+export function warnCorrupt(count: number, where: string): void {
+  if (count > 0) process.stderr.write(`warning: skipped ${count} corrupt line(s) in ${where}\n`);
+}
 
 export function numberOrNull(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;

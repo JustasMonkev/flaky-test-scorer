@@ -39,3 +39,15 @@ export function authStatus(): ProviderStatus[] {
 export function autoSelectProvider(): ProviderName | null {
   return authStatus().find((s) => s.available)?.provider ?? null;
 }
+
+/** The requested provider, or the auto-selected one — one error wording for every surface. */
+export function requireProvider(requested?: ProviderName): ProviderName {
+  const provider = requested ?? autoSelectProvider();
+  if (!provider) {
+    throw new Error(
+      "no AI provider configured — set ANTHROPIC_API_KEY or OPENAI_API_KEY, or run " +
+        "`flaky-test-scorer auth set-key <provider>`",
+    );
+  }
+  return provider;
+}

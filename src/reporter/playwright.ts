@@ -9,7 +9,8 @@
  *   reporter: [["flaky-test-scorer/reporter/playwright", { history: ".flaky-history.jsonl" }]]
  */
 import { relative } from "node:path";
-import { appendHistory, cleanTestId, detectCommit, readHistory } from "../ingest.js";
+import { stripVTControlCharacters } from "node:util";
+import { appendHistory, detectCommit, joinTestId, readHistory } from "../ingest.js";
 import type { RunRecord } from "../score.js";
 
 export interface FlakyReporterOptions {
@@ -45,8 +46,9 @@ interface ConfigLike {
   rootDir?: string;
 }
 
-/** Playwright error messages are full of ANSI colour, which wrecks clustering. */
-const ANSI = /\u001b\[[0-9;]*m/g;
+/** Repo-relative posix path — the same shape the Playwright JSON ingester records. */
+const posixRel = (root: string, file: string): string =>
+  relative(root, file).split("\\").join("/");
 
 function ancestors(test: TestCaseLike): SuiteLike[] {
   const chain: SuiteLike[] = [];
@@ -62,17 +64,13 @@ function ancestors(test: TestCaseLike): SuiteLike[] {
 export function playwrightTestId(test: TestCaseLike, rootDir: string): string {
   const chain = ancestors(test);
   const fileSuite = chain.find((s) => s.type === "file")?.title;
-  const file = test.location?.file ? relative(rootDir, test.location.file).split("\\").join("/") : fileSuite;
-  return cleanTestId(
-    [
-      file,
-      chain.find((s) => s.type === "project")?.title,
-      ...chain.filter((s) => s.type === "describe").map((s) => s.title),
-      test.title,
-    ]
-      .filter((part): part is string => !!part)
-      .join(" > "),
-  );
+  const file = test.location?.file ? posixRel(rootDir, test.location.file) : fileSuite;
+  return joinTestId([
+    file,
+    chain.find((s) => s.type === "project")?.title,
+    ...chain.filter((s) => s.type === "describe").map((s) => s.title),
+    test.title,
+  ]);
 }
 
 export default class FlakyHistoryReporter {
@@ -98,9 +96,7 @@ export default class FlakyHistoryReporter {
     const failed = result.status !== "passed";
     const startTime =
       result.startTime instanceof Date ? result.startTime.toISOString() : (result.startTime ?? null);
-    const file = test.location?.file
-      ? relative(this.rootDir, test.location.file).split("\\").join("/")
-      : null;
+    const file = test.location?.file ? posixRel(this.rootDir, test.location.file) : null;
 
     this.pending.push({
       test_id: playwrightTestId(test, this.rootDir),
@@ -108,8 +104,9 @@ export default class FlakyHistoryReporter {
       version: null, // filled in at onEnd, where a single commit lookup covers the run
       timestamp: startTime,
       duration_s: typeof result.duration === "number" ? result.duration / 1000 : null,
+      // Playwright error messages are full of ANSI colour, which wrecks clustering.
       failure_message: failed
-        ? (result.error?.message?.replace(ANSI, "").slice(0, 2000) ?? result.status)
+        ? (result.error?.message ? stripVTControlCharacters(result.error.message).slice(0, 2000) : result.status)
         : null,
       source_file: file,
       attempt: typeof result.retry === "number" ? result.retry : 0,

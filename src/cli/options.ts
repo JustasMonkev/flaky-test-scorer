@@ -1,6 +1,6 @@
 import type { ProviderName } from "../ai/index.js";
 import { InputError } from "../ingest.js";
-import type { Metric, Model } from "../score.js";
+import { SCORE_DEFAULTS, type Metric, type Model } from "../score.js";
 
 export const DEFAULT_BASELINE = ".flaky-baseline.json";
 
@@ -56,7 +56,7 @@ export interface ScoreParams {
 }
 
 export function parseScoreParams(values: ReportOptions): ScoreParams {
-  const raw = values.metric ?? "flipRate";
+  const raw = values.metric ?? SCORE_DEFAULTS.metric;
   // Canonicalized, not echoed: the accepted spelling is case-insensitive but
   // `params.metric` is part of the stable JSON schema, so `--metric FLIPRATE`
   // must not put "FLIPRATE" in it.
@@ -64,13 +64,13 @@ export function parseScoreParams(values: ReportOptions): ScoreParams {
     raw.toLowerCase() === "fliprate" ? "flipRate" : raw.toLowerCase() === "entropy" ? "entropy" : null
   ) as Metric | null;
   if (metric === null) throw new InputError(`--metric must be flipRate or entropy, got "${raw}"`);
-  const model = (values.model ?? "weighted") as Model;
+  const model = (values.model ?? SCORE_DEFAULTS.model) as Model;
   if (model !== "weighted" && model !== "unweighted") {
     throw new InputError(`--model must be weighted or unweighted, got "${model}"`);
   }
-  const lam = numberOption(values.lam, "lam", 0.1);
+  const lam = numberOption(values.lam, "lam", SCORE_DEFAULTS.lam);
   if (!(lam > 0 && lam <= 1)) throw new InputError("--lam must be in range (0, 1]");
-  const minReruns = numberOption(values.minReruns, "min-reruns", 2);
+  const minReruns = numberOption(values.minReruns, "min-reruns", SCORE_DEFAULTS.minReruns);
   if (minReruns < 1) throw new InputError("--min-reruns must be >= 1");
   return { metric, model, lam, minReruns };
 }
@@ -78,8 +78,4 @@ export function parseScoreParams(values: ReportOptions): ScoreParams {
 export function requireHistory(history: string | undefined, command: string): string {
   if (!history) throw new InputError(`${command} needs --history <file>`);
   return history;
-}
-
-export function warnCorrupt(count: number, where: string): void {
-  if (count > 0) process.stderr.write(`warning: skipped ${count} corrupt line(s) in ${where}\n`);
 }

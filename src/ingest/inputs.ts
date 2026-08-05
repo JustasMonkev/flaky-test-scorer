@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, statSync, type Dirent } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
-import { InputError } from "./common.js";
+import { join, resolve, sep } from "node:path";
+import { InputError, relPosix } from "./common.js";
 
 const EXTENSIONS = [".xml", ".json", ".csv", ".jsonl"];
 
@@ -62,7 +62,7 @@ export function expandInputs(patterns: string[], cwd = process.cwd()): string[] 
 
     const re = globToRegExp(pattern);
     for (const file of walk(base, pattern.includes("**") || wildcardAt < parts.length - 1)) {
-      const rel = relative(cwd, resolve(file)).split(sep).join("/");
+      const rel = relPosix(file, cwd);
       if (re.test(rel) || re.test(resolve(file).split(sep).join("/"))) found.add(resolve(file));
     }
   }

@@ -6,10 +6,11 @@ import {
   mergeHistories,
   pruneRuns,
   readHistory,
+  warnCorrupt,
   writeHistory,
 } from "../ingest.js";
 import { timestampKey } from "../score.js";
-import { numberOption, requireHistory, warnCorrupt } from "./options.js";
+import { numberOption, requireHistory } from "./options.js";
 
 export function runHistoryMerge(inputs: string[], values: { history?: string }): number {
   const out = requireHistory(values.history, "history merge");
