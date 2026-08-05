@@ -10,25 +10,18 @@ import {
   type XmlNode,
 } from "./common.js";
 
+// Maven Surefire retry children: each one is a separate failed attempt.
+const RETRY_TAGS = ["flakyFailure", "flakyError", "rerunFailure", "rerunError"] as const;
+
+const ARRAY_TAGS = new Set(["testsuite", "testcase", "failure", "error", "skipped", ...RETRY_TAGS]);
+
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "@_",
   parseAttributeValue: false,
   parseTagValue: false,
   trimValues: true,
-  isArray: (name) =>
-    [
-      "testsuite",
-      "testcase",
-      "failure",
-      "error",
-      "skipped",
-      // Maven Surefire retry children: each one is a separate failed attempt.
-      "flakyFailure",
-      "flakyError",
-      "rerunFailure",
-      "rerunError",
-    ].includes(name),
+  isArray: (name) => ARRAY_TAGS.has(name),
 });
 
 function collectSuites(node: XmlNode, out: XmlNode[]): void {
@@ -88,12 +81,7 @@ export function parseJUnit(xml: string, file: string, version: string | null): R
       // Surefire records each retry as its own child element; the <testcase> itself
       // carries the FINAL outcome. Emitting attempts as ordered runs is what lets
       // flipRate / within_version_flips see a same-commit flip at all.
-      const retries = [
-        ...asArray(testcase["flakyFailure"]),
-        ...asArray(testcase["flakyError"]),
-        ...asArray(testcase["rerunFailure"]),
-        ...asArray(testcase["rerunError"]),
-      ];
+      const retries = RETRY_TAGS.flatMap((tag) => asArray(testcase[tag]));
       retries.forEach((retry, i) => {
         runs.push({
           ...base,

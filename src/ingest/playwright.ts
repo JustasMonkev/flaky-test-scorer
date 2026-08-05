@@ -1,5 +1,5 @@
 import type { RunRecord } from "../score.js";
-import { asArray, cleanTestId, numberOrNull, type XmlNode } from "./common.js";
+import { asArray, joinTestId, numberOrNull, type XmlNode } from "./common.js";
 
 /** `--reporter json` output: an object whose `suites` is an array. Shape, not filename. */
 export function isPlaywrightReport(data: unknown): boolean {
@@ -43,7 +43,7 @@ function walkPlaywrightSuite(
     for (const test of asArray(spec["tests"])) {
       const project = String(test["projectName"] ?? "").trim();
       // Same " > " join as the JUnit ids so one history can hold both.
-      const testId = cleanTestId([here, project, ...titles, specTitle].filter((p) => p !== "").join(" > "));
+      const testId = joinTestId([here, project, ...titles, specTitle]);
       if (!testId) continue;
 
       const attempts = asArray(test["results"])

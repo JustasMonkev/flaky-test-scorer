@@ -1,4 +1,4 @@
-import { round4, type RunRecord } from "./score.js";
+import { countFlips, round4, type RunRecord } from "./score.js";
 
 export interface FailureCluster {
   pattern: string;
@@ -95,8 +95,7 @@ export function classify(messages: string[]): LikelyCause {
   for (const message of messages) {
     const text = message.toLowerCase();
     for (const [category, patterns] of PATTERNS) {
-      const matched = patterns.filter((re) => re.test(text)).length;
-      if (matched > 0) {
+      if (patterns.some((re) => re.test(text))) {
         counts.set(category, (counts.get(category) ?? 0) + 1);
         classified++;
         break; // first matching category owns the message
@@ -169,7 +168,7 @@ export function buildEvidence(
   let withinVersionFlips = 0;
   let withinRunRetries = 0;
   for (const runs of versions.values()) {
-    for (let i = 1; i < runs.length; i++) if (runs[i]!.result !== runs[i - 1]!.result) flips++;
+    flips += countFlips(runs.map((r) => r.result));
     if (runs.some((r) => r.result) && runs.some((r) => !r.result)) withinVersionFlips++;
 
     // Attempts of one execution are consecutive and restart at attempt 0; a run

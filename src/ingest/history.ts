@@ -1,28 +1,12 @@
-import { closeSync, existsSync, openSync, readFileSync, writeSync } from "node:fs";
-import { relative, resolve, sep } from "node:path";
-import { timestampKey, type RunRecord } from "../score.js";
-import { InputError, stripBom, writeAtomic } from "./common.js";
-import { runsFromRows } from "./rows.js";
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, writeSync } from "node:fs";
+import { compareKeys, timestampKey, type RunRecord } from "../score.js";
+import { InputError, relPosix, stripBom, writeAtomic } from "./common.js";
+import { CONSUMED_ROW_KEYS, runsFromRows } from "./rows.js";
 
 export interface HistoryRead {
   runs: RunRecord[];
   corruptLines: number;
 }
-
-/**
- * Every key `runsFromRows` consumes. Anything else on a history line is a field
- * this version does not know about (`ci_job`, `branch`, a future column) and must
- * survive a merge/prune rewrite untouched.
- */
-const KNOWN_ROW_KEYS = new Set([
-  "test_id", "test", "name", "testId", "id",
-  "result", "status", "outcome",
-  "version",
-  "timestamp", "time", "date",
-  "duration_s", "duration", "elapsed",
-  "failure_message", "message", "error",
-  "source_file", "attempt",
-]);
 
 /**
  * Read a JSONL history file. Corrupt lines are counted and skipped, never fatal.
@@ -45,18 +29,13 @@ export function readHistory(path: string): HistoryRead {
     if (line.trim() === "") continue;
     try {
       const row = JSON.parse(line) as Record<string, unknown>;
-      const [run] = runsFromRows(
-        [row],
-        typeof row["source_file"] === "string" ? row["source_file"] : path,
-        null,
-      );
+      const [run] = runsFromRows([row], null, null);
       if (!run) {
         corruptLines++;
         continue;
       }
-      if (typeof row["source_file"] !== "string") run.source_file = null;
       for (const key of Object.keys(row)) {
-        if (!KNOWN_ROW_KEYS.has(key)) (run as unknown as Record<string, unknown>)[key] = row[key];
+        if (!CONSUMED_ROW_KEYS.has(key)) (run as unknown as Record<string, unknown>)[key] = row[key];
       }
       runs.push(run);
     } catch {
@@ -73,8 +52,7 @@ export function readHistory(path: string): HistoryRead {
  * different absolute path, and every one of those double-counted the run.
  */
 function sourceKey(file: string | null): string {
-  if (!file) return "";
-  return relative(process.cwd(), resolve(file)).split(sep).join("/");
+  return file ? relPosix(file) : "";
 }
 
 function runKey(run: RunRecord): string {
@@ -111,18 +89,22 @@ export function dedupAgainst(existing: RunRecord[], incoming: RunRecord[]): RunR
 export function appendHistory(path: string, existing: RunRecord[], incoming: RunRecord[]): RunRecord[] {
   const added = dedupAgainst(existing, incoming);
   if (added.length > 0) {
-    // A history truncated by a killed process may not end in a newline; appending
-    // straight onto it would fuse two records into one corrupt line.
-    const tail = existsSync(path) ? readFileSync(path) : Buffer.alloc(0);
-    const lead = tail.length > 0 && tail.at(-1) !== 0x0a ? "\n" : "";
     let fd: number;
     try {
-      fd = openSync(path, "a");
+      fd = openSync(path, "a+");
     } catch (err) {
       throw new InputError(`could not write ${path}: ${(err as Error).message}`);
     }
     try {
-      if (lead) writeSync(fd, lead);
+      // A history truncated by a killed process may not end in a newline; appending
+      // straight onto it would fuse two records into one corrupt line. One byte is
+      // enough to know — never re-read the whole file the caller just read.
+      const size = fstatSync(fd).size;
+      if (size > 0) {
+        const last = Buffer.alloc(1);
+        readSync(fd, last, 0, 1, size - 1);
+        if (last[0] !== 0x0a) writeSync(fd, "\n");
+      }
       for (const run of added) writeSync(fd, `${JSON.stringify(run)}\n`);
     } catch (err) {
       throw new InputError(`could not write ${path}: ${(err as Error).message}`);
@@ -133,18 +115,14 @@ export function appendHistory(path: string, existing: RunRecord[], incoming: Run
   return [...existing, ...added];
 }
 
-/** Sort by timestamp key, ties broken by input order — same ordering the scorer uses. */
-export function chronological(runs: RunRecord[]): RunRecord[] {
-  return runs
+/** Sort by timestamp key, ties broken by input order — the scorer's own comparator. */
+const byTimestamp = (runs: RunRecord[]) =>
+  runs
     .map((run, order) => ({ run, order, key: timestampKey(run.timestamp) }))
-    .sort(
-      (a, b) =>
-        a.key[0] - b.key[0] ||
-        a.key[1] - b.key[1] ||
-        (a.key[2] < b.key[2] ? -1 : a.key[2] > b.key[2] ? 1 : 0) ||
-        a.order - b.order,
-    )
-    .map((d) => d.run);
+    .sort((a, b) => compareKeys(a.key, b.key) || a.order - b.order);
+
+export function chronological(runs: RunRecord[]): RunRecord[] {
+  return byTimestamp(runs).map((d) => d.run);
 }
 
 /**
@@ -185,24 +163,21 @@ export interface PruneOptions {
 
 /** Both options together intersect: a run must survive every filter given. */
 export function pruneRuns(runs: RunRecord[], options: PruneOptions, now = Date.now()): RunRecord[] {
-  let kept = chronological(runs);
+  let kept = byTimestamp(runs);
 
   if (options.keepDays !== undefined) {
     const cutoff = (now - options.keepDays * 86_400_000) / 1000;
     // ponytail: only ISO-like timestamps are age-comparable. Numeric, opaque and
     // missing ones are KEPT rather than guessed at — pruning must never silently
     // discard history. Upgrade path: teach timestampKey epoch-seconds detection.
-    kept = kept.filter((run) => {
-      const key = timestampKey(run.timestamp);
-      return key[0] !== 1 || key[1] >= cutoff;
-    });
+    kept = kept.filter(({ key }) => key[0] !== 1 || key[1] >= cutoff);
   }
 
   if (options.keepRunsPerTest !== undefined) {
     const counts = new Map<string, number>();
     const keep = new Array<boolean>(kept.length).fill(false);
     for (let i = kept.length - 1; i >= 0; i--) {
-      const testId = kept[i]!.test_id;
+      const testId = kept[i]!.run.test_id;
       const n = counts.get(testId) ?? 0;
       if (n < options.keepRunsPerTest) {
         keep[i] = true;
@@ -212,5 +187,5 @@ export function pruneRuns(runs: RunRecord[], options: PruneOptions, now = Date.n
     kept = kept.filter((_, i) => keep[i]!);
   }
 
-  return kept;
+  return kept.map((d) => d.run);
 }

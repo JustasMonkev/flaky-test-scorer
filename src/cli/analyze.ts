@@ -8,6 +8,7 @@ import {
   loadRuns,
   readBaseline,
   readHistory,
+  warnCorrupt,
 } from "../ingest.js";
 import { buildReport, flakyRanked, renderGithub, renderHuman, renderMarkdown, type Report } from "../report.js";
 import { groupByTestAndVersion } from "../score.js";
@@ -33,13 +34,8 @@ async function tryExplain(
   baseline: ReadonlySet<string> | null,
 ): Promise<AiAnalysis | null> {
   try {
-    const { autoSelectProvider, explain } = await loadAi();
-    const provider = chosen ?? autoSelectProvider();
-    if (!provider) {
-      throw new Error(
-        "no AI provider configured — set ANTHROPIC_API_KEY or OPENAI_API_KEY, or run `flaky-test-scorer auth set-key <provider>`",
-      );
-    }
+    const { requireProvider, explain } = await loadAi();
+    const provider = requireProvider(chosen);
     // Newly-flaky first: the explain budget is paid per test, and a repo with a
     // dozen baselined tests spent all of it on flakiness the user already accepted.
     const tests = flakyRanked(report, baseline).slice(0, top);
@@ -78,9 +74,7 @@ export function loadReport(
 
   if (values.history) {
     const { runs: existing, corruptLines } = readHistory(values.history);
-    if (corruptLines > 0) {
-      process.stderr.write(`warning: skipped ${corruptLines} corrupt line(s) in ${values.history}\n`);
-    }
+    warnCorrupt(corruptLines, values.history);
     runs = appendHistory(values.history, existing, runs);
   }
 
@@ -109,11 +103,11 @@ export async function runReport(
   const explainTop = Math.max(0, numberOption(values.explainTop, "explain-top", 3));
   // Silently ignored flags read as "it ran and found nothing worth explaining".
   if (!values.explain) {
-    for (const flag of ["provider", "explain-top"] as const) {
-      const given = flag === "provider" ? values.provider : values.explainTop;
-      if (given !== undefined) {
-        process.stderr.write(`warning: --${flag} has no effect without --explain\n`);
-      }
+    if (values.provider !== undefined) {
+      process.stderr.write("warning: --provider has no effect without --explain\n");
+    }
+    if (values.explainTop !== undefined) {
+      process.stderr.write("warning: --explain-top has no effect without --explain\n");
     }
   }
   if (command === "ci" && failAbove === null) {
@@ -122,19 +116,14 @@ export async function runReport(
     );
   }
   if (command === "analyze") {
-    // Both are ci-only. Accepting them silently made `analyze --fail-above` a
-    // permanently green CI gate.
-    for (const [flag, value] of [
-      ["fail-above", values.failAbove],
-      // `--format markdown` is a rendering choice, not a CI gate — SPEC-V3 F7
-      // puts it on both commands. `--format github` stays ci-only.
-      ["format", values.format === "markdown" ? undefined : values.format],
-      ["baseline", values.baseline],
-    ] as const) {
-      if (value !== undefined) {
-        throw new InputError(`--${flag} is only supported by the "ci" command; use "ci" instead of "analyze"`);
-      }
-    }
+    // These are ci-only. Accepting them silently made `analyze --fail-above` a
+    // permanently green CI gate. `--format markdown` is the exception: a rendering
+    // choice, not a CI gate — SPEC-V3 F7 puts it on both commands.
+    const ciOnly = (flag: string) =>
+      new InputError(`--${flag} is only supported by the "ci" command; use "ci" instead of "analyze"`);
+    if (values.failAbove !== undefined) throw ciOnly("fail-above");
+    if (values.format !== undefined && values.format !== "markdown") throw ciOnly("format");
+    if (values.baseline !== undefined) throw ciOnly("baseline");
   }
   // A missing baseline file is an empty baseline (first run in a fresh repo); a
   // corrupt one is an input error, because silently gating on nothing is worse.

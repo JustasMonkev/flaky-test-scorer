@@ -12,16 +12,21 @@ function buildProgram(setCode: (code: number) => void): Command {
   const program = new Command();
   program.name("flaky-test-scorer").exitOverride();
 
-  const withCommonOptions = (cmd: Command): Command =>
+  // The ingest/score options shared by analyze, ci and baseline update.
+  const withScoreOptions = (cmd: Command): Command =>
     cmd
       .argument("<globs-or-paths...>")
       .option("--history <file>")
       .option("--commit <sha>")
-      .option("--json", "", false)
+      .option("--baseline <file>")
       .option("--metric <name>")
       .option("--model <name>")
       .option("--lam <n>")
-      .option("--min-reruns <n>")
+      .option("--min-reruns <n>");
+
+  const withCommonOptions = (cmd: Command): Command =>
+    withScoreOptions(cmd)
+      .option("--json", "", false)
       .option("--top <n>")
       .option("--explain", "", false)
       .option("--provider <name>")
@@ -29,8 +34,7 @@ function buildProgram(setCode: (code: number) => void): Command {
       // Declared on both commands so `analyze --fail-above` gets the "use ci"
       // message instead of a generic unknown-option error.
       .option("--fail-above <n>")
-      .option("--format <name>")
-      .option("--baseline <file>");
+      .option("--format <name>");
 
   for (const name of ["analyze", "ci"] as const) {
     withCommonOptions(program.command(name)).action(async (inputs: string[], values: ReportOptions) => {
@@ -38,20 +42,11 @@ function buildProgram(setCode: (code: number) => void): Command {
     });
   }
 
-  program
-    .command("baseline")
-    .command("update")
-    .argument("<globs-or-paths...>")
-    .option("--history <file>")
-    .option("--commit <sha>")
-    .option("--baseline <file>")
-    .option("--metric <name>")
-    .option("--model <name>")
-    .option("--lam <n>")
-    .option("--min-reruns <n>")
-    .action(async (inputs: string[], values: ReportOptions) => {
+  withScoreOptions(program.command("baseline").command("update")).action(
+    async (inputs: string[], values: ReportOptions) => {
       setCode(await runBaselineUpdate(inputs, values));
-    });
+    },
+  );
 
   const history = program.command("history");
   history

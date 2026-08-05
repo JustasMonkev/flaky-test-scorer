@@ -1,14 +1,25 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { relative, sep } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import type { RunRecord } from "../score.js";
-import { InputError, stripBom } from "./common.js";
+import { InputError, relPosix, stripBom, warnCorrupt } from "./common.js";
 import { readHistory } from "./history.js";
 import { parseJUnit } from "./junit.js";
 import { isPlaywrightReport, parsePlaywrightReport } from "./playwright.js";
 import { parseCsv, runsFromRows } from "./rows.js";
 
 export function loadFile(file: string, version: string | null): RunRecord[] {
+  // .jsonl is this tool's own history format: line-delimited, so never a single JSON
+  // doc, and readHistory reads it itself — no second full read of a large history.
+  // SPEC.md: corrupt lines are skipped with a stderr warning. Only the --history
+  // path used to warn, so `analyze .flaky-history.jsonl` scored a truncated file
+  // silently — the exact recipe the Playwright reporter's README hands out.
+  if (file.toLowerCase().endsWith(".jsonl")) {
+    if (!existsSync(file)) throw new InputError(`cannot read ${file}: no such file`);
+    const { runs, corruptLines } = readHistory(file);
+    warnCorrupt(corruptLines, file);
+    return runs;
+  }
+
   let text: string;
   try {
     text = readFileSync(file, "utf8");
@@ -21,21 +32,9 @@ export function loadFile(file: string, version: string | null): RunRecord[] {
   // absolute path leaks the local layout, churns the diff, and — because it is part
   // of the dedup identity — made the same artifact from `_work/1` and `_work/2`
   // count twice. The Playwright reporter already records repo-relative paths.
-  const label = relative(process.cwd(), file).split(sep).join("/") || file;
+  const label = relPosix(file) || file;
   const lower = file.toLowerCase();
   if (lower.endsWith(".csv")) return runsFromRows(parseCsv(text), label, version);
-  // .jsonl is this tool's own history format: line-delimited, so never a single JSON doc.
-  // Directory expansion picks these up, and JSON.parse on one always failed with exit 2.
-  if (lower.endsWith(".jsonl")) {
-    const { runs, corruptLines } = readHistory(file);
-    // SPEC.md: corrupt lines are skipped with a stderr warning. Only the --history
-    // path used to warn, so `analyze .flaky-history.jsonl` scored a truncated file
-    // silently — the exact recipe the Playwright reporter's README hands out.
-    if (corruptLines > 0) {
-      process.stderr.write(`warning: skipped ${corruptLines} corrupt line(s) in ${file}\n`);
-    }
-    return runs;
-  }
   if (lower.endsWith(".json")) {
     let data: unknown;
     try {

@@ -70,15 +70,19 @@ export function entropy(results: boolean[]): number {
   return score;
 }
 
+/** Number of consecutive run pairs that flip pass/fail — THE definition of a flip. */
+export function countFlips(results: boolean[]): number {
+  let flips = 0;
+  for (let i = 1; i < results.length; i++) {
+    if (results[i] !== results[i - 1]) flips++;
+  }
+  return flips;
+}
+
 /** Fraction of consecutive run pairs that flip pass/fail. */
 export function flipRate(results: boolean[]): number {
   const count = results.length;
-  if (count < 2) return 0;
-  let flips = 0;
-  for (let i = 1; i < count; i++) {
-    if (results[i] !== results[i - 1]) flips++;
-  }
-  return flips / (count - 1);
+  return count < 2 ? 0 : countFlips(results) / (count - 1);
 }
 
 /** Mean of per-version scores. */
@@ -124,7 +128,7 @@ export function verdict(score: number): Verdict {
   return "very_flaky";
 }
 
-type TimestampKey = [number, number, string];
+export type TimestampKey = [number, number, string];
 
 const NUMERIC = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 const ISO_LIKE = /^\d{4}-\d{2}-\d{2}/;
@@ -146,7 +150,7 @@ export function timestampKey(value: string | number | null | undefined): Timesta
   return [2, 0, text];
 }
 
-function compareKeys(a: TimestampKey, b: TimestampKey): number {
+export function compareKeys(a: TimestampKey, b: TimestampKey): number {
   if (a[0] !== b[0]) return a[0] - b[0];
   if (a[1] !== b[1]) return a[1] - b[1];
   return a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0;
@@ -180,9 +184,22 @@ export interface ScoreOptions {
   minReruns?: number;
 }
 
+/** One home for the scoring defaults — the CLI and MCP surfaces echo these. */
+export const SCORE_DEFAULTS = {
+  metric: "flipRate",
+  model: "weighted",
+  lam: 0.1,
+  minReruns: 2,
+} as const satisfies Required<ScoreOptions>;
+
 export function scoreTests(
   grouped: Map<string, Map<string, RunRecord[]>>,
-  { metric = "flipRate", model = "weighted", lam = 0.1, minReruns = 2 }: ScoreOptions = {},
+  {
+    metric = SCORE_DEFAULTS.metric,
+    model = SCORE_DEFAULTS.model,
+    lam = SCORE_DEFAULTS.lam,
+    minReruns = SCORE_DEFAULTS.minReruns,
+  }: ScoreOptions = {},
 ): ScoredTest[] {
   const fn = metric.toLowerCase() === "entropy" ? entropy : flipRate;
   const rows: ScoredTest[] = [];
