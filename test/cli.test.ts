@@ -53,13 +53,13 @@ describe("analyze", () => {
 
   it("exits 0 and emits the documented schema", () => {
     expect(status).toBe(0);
-    expect(report.schema_version).toBe(1);
+    expect(report.schema_version).toBe(2);
     expect(report.params).toEqual({ metric: "flipRate", model: "weighted", lam: 0.1, min_reruns: 2 });
     expect(report.summary).toEqual({ tests: 3, runs: 12, flaky: 2, very_flaky: 1, low_data: 0 });
   });
 
   it("ranks the alternating test first with the pinned scores", () => {
-    expect(report.tests.map((t) => [t.rank, t.test_id, t.score, t.lower_bound_score])).toEqual([
+    expect(report.tests.map((t) => [t.rank, t.test_id, t.score, t.gating_score])).toEqual([
       [1, "checkout > applies promo code", 1, 0.5],
       [2, "checkout > syncs inventory", 0.3333, 0.1667],
       [3, "checkout > renders cart", 0, 0],
@@ -167,18 +167,18 @@ describe("history", () => {
 });
 
 describe("ci", () => {
-  it("exits 1 when a lower_bound_score exceeds --fail-above", () => {
+  it("exits 1 when a gating_score exceeds --fail-above", () => {
     const { status, stderr } = runCli(["ci", suite, "--commit", "v1", "--fail-above", "0.4"]);
     expect(status).toBe(1);
     expect(stderr).toContain("applies promo code");
   });
 
-  it("exits 0 when the threshold is above every lower bound", () => {
+  it("exits 0 when the threshold is above every gating score", () => {
     expect(runCli(["ci", suite, "--commit", "v1", "--fail-above", "0.9"]).status).toBe(0);
   });
 
-  it("uses the lower bound, not the raw score", () => {
-    // raw score is 1.0, lower bound is 0.5 -> a 0.6 threshold must not fail.
+  it("uses the gating score, not the raw score", () => {
+    // raw score is 1.0, gating score is 0.5 -> a 0.6 threshold must not fail.
     expect(runCli(["ci", suite, "--commit", "v1", "--fail-above", "0.6"]).status).toBe(0);
   });
 
@@ -215,7 +215,7 @@ describe("ci", () => {
       { GITHUB_STEP_SUMMARY: summaryFile },
     );
     const report = JSON.parse(stdout) as Report;
-    expect(report.schema_version).toBe(1);
+    expect(report.schema_version).toBe(2);
     expect(stdout).not.toContain("::warning");
     expect(stderr).toContain("::warning title=Flaky test::checkout > applies promo code");
     expect(readFileSync(summaryFile, "utf8")).toContain("## Flaky test report");

@@ -1,4 +1,4 @@
-import { countFlips, round4, type RunRecord } from "./score.js";
+import { countFlips, groupIndependentRuns, round4, type RunRecord } from "./score.js";
 
 export interface FailureCluster {
   pattern: string;
@@ -168,25 +168,16 @@ export function buildEvidence(
   let withinVersionFlips = 0;
   let withinRunRetries = 0;
   for (const runs of versions.values()) {
-    flips += countFlips(runs.map((r) => r.result));
+    const executionGroups = groupIndependentRuns(runs);
+    flips += countFlips(executionGroups.flat().map((r) => r.result));
     if (runs.some((r) => r.result) && runs.some((r) => !r.result)) withinVersionFlips++;
 
-    // Attempts of one execution are consecutive and restart at attempt 0; a run
-    // without an attempt index ends whatever group preceded it.
-    let group: boolean[] = [];
-    const flush = () => {
-      if (group.length > 1 && group.includes(true) && group.includes(false)) withinRunRetries++;
-      group = [];
-    };
-    for (const run of runs) {
-      if (run.attempt === undefined || run.attempt === null) {
-        flush();
-        continue;
+    for (const group of executionGroups) {
+      const outcomes = group.map((run) => run.result);
+      if (outcomes.length > 1 && outcomes.includes(true) && outcomes.includes(false)) {
+        withinRunRetries++;
       }
-      if (run.attempt === 0) flush();
-      group.push(run.result);
     }
-    flush();
   }
 
   const cv = durations.perTest.get(testId);

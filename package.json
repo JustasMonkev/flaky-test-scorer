@@ -1,6 +1,6 @@
 {
   "name": "flaky-test-scorer",
-  "version": "1.0.2",
+  "version": "2.0.0",
   "homepage": "https://github.com/JustasMonkev/flaky-test-scorer",
   "description": "Detect and rank flaky tests from test-run history, with deterministic evidence and agent-ready JSON.",
   "keywords": [
@@ -14,7 +14,7 @@
   "license": "MIT",
   "type": "module",
   "engines": {
-    "node": ">=25"
+    "node": ">=22.12.0"
   },
   "bin": {
     "flaky-test-scorer": "dist/cli.js"
@@ -39,8 +39,12 @@
   ],
   "scripts": {
     "build": "tsc && chmod +x dist/cli.js",
+    "lint": "npm run build && eslint dist --max-warnings=0",
     "pretest": "npm run build",
     "test": "vitest run",
+    "pretest:e2e": "npm run build",
+    "test:e2e": "vitest run test/e2e.test.ts test/e2e-v3.test.ts test/playwright-real.test.ts test/package-real.test.ts",
+    "typecheck": "tsc --project tsconfig.test.json",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
@@ -51,7 +55,11 @@
     "openai": "^7.4.0"
   },
   "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.62.1",
     "@types/node": "^26.1.2",
+    "eslint": "10.9.1",
+    "globals": "17.11.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   }

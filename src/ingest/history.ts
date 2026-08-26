@@ -1,5 +1,5 @@
 import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, writeSync } from "node:fs";
-import { compareKeys, timestampKey, type RunRecord } from "../score.js";
+import { compareKeys, timestampKey, validExecutionId, type RunRecord } from "../score.js";
 import { InputError, relPosix, stripBom, writeAtomic } from "./common.js";
 import { CONSUMED_ROW_KEYS, runsFromRows } from "./rows.js";
 
@@ -35,7 +35,14 @@ export function readHistory(path: string): HistoryRead {
         continue;
       }
       for (const key of Object.keys(row)) {
-        if (!CONSUMED_ROW_KEYS.has(key)) (run as unknown as Record<string, unknown>)[key] = row[key];
+        if (!CONSUMED_ROW_KEYS.has(key)) {
+          Object.defineProperty(run, key, {
+            value: row[key],
+            enumerable: true,
+            configurable: true,
+            writable: true,
+          });
+        }
       }
       runs.push(run);
     } catch {
@@ -55,7 +62,7 @@ function sourceKey(file: string | null): string {
   return file ? relPosix(file) : "";
 }
 
-function runKey(run: RunRecord): string {
+function legacyRunKey(run: RunRecord): string {
   return JSON.stringify([
     run.test_id,
     run.version ?? "",
@@ -63,6 +70,19 @@ function runKey(run: RunRecord): string {
     sourceKey(run.source_file ?? null),
     run.result,
   ]);
+}
+
+function exactRunKey(run: RunRecord): string | null {
+  return validExecutionId(run.execution_id)
+    ? JSON.stringify([legacyRunKey(run), run.execution_id, run.attempt ?? ""])
+    : null;
+}
+
+function sameRun(a: RunRecord, b: RunRecord): boolean {
+  if (legacyRunKey(a) !== legacyRunKey(b)) return false;
+  const aExact = exactRunKey(a);
+  const bExact = exactRunKey(b);
+  return aExact === null || bExact === null || aExact === bExact;
 }
 
 /**
@@ -74,7 +94,7 @@ function runKey(run: RunRecord): string {
 export function dedupAgainst(existing: RunRecord[], incoming: RunRecord[]): RunRecord[] {
   if (incoming.length === 0 || incoming.length > existing.length) return incoming;
   const offset = existing.length - incoming.length;
-  return incoming.every((run, i) => runKey(run) === runKey(existing[offset + i]!)) ? [] : incoming;
+  return incoming.every((run, i) => sameRun(run, existing[offset + i]!)) ? [] : incoming;
 }
 
 /**
@@ -130,23 +150,97 @@ export function chronological(runs: RunRecord[]): RunRecord[] {
  * matching ordinal occurrences uploaded by another shard are duplicates.
  */
 export function mergeHistories(files: string[]): HistoryRead & { corruptFiles: string[] } {
-  const seen = new Set<string>();
   const runs: RunRecord[] = [];
+  const anyBuckets = new Map<string, number[]>();
+  const legacyBuckets = new Map<string, number[]>();
+  const exactBuckets = new Map<string, number[]>();
+  const legacyIndexes = new Set<number>();
   const corruptFiles: string[] = [];
   let corruptLines = 0;
+
+  const addToBucket = (buckets: Map<string, number[]>, key: string, index: number) => {
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(index);
+    else buckets.set(key, [index]);
+  };
+
   for (const file of files) {
     const read = readHistory(file);
     corruptLines += read.corruptLines;
     if (read.corruptLines > 0) corruptFiles.push(file);
-    const occurrences = new Map<string, number>();
-    for (const run of read.runs) {
-      const key = runKey(run);
-      const n = occurrences.get(key) ?? 0;
-      occurrences.set(key, n + 1);
-      const identity = key + " " + n;
-      if (seen.has(identity)) continue;
-      seen.add(identity);
-      runs.push(run);
+    const used = new Set<number>();
+    const cursors = new Map<string, number>();
+    const take = (buckets: Map<string, number[]>, kind: string, key: string): number | null => {
+      const bucket = buckets.get(key);
+      if (!bucket) return null;
+      const cursorKey = `${kind}:${key}`;
+      let cursor = cursors.get(cursorKey) ?? bucket.length - 1;
+      while (cursor >= 0) {
+        const index = bucket[cursor--]!;
+        if (used.has(index) || (kind === "legacy" && !legacyIndexes.has(index))) continue;
+        cursors.set(cursorKey, cursor);
+        used.add(index);
+        return index;
+      }
+      cursors.set(cursorKey, cursor);
+      return null;
+    };
+
+    const pending = read.runs.map((run, index) => ({
+      run,
+      index,
+      legacyKey: legacyRunKey(run),
+      exactKey: exactRunKey(run),
+    }));
+    const byLegacyKey = new Map<string, typeof pending>();
+    for (const entry of pending) {
+      const group = byLegacyKey.get(entry.legacyKey);
+      if (group) group.push(entry);
+      else byLegacyKey.set(entry.legacyKey, [entry]);
+    }
+
+    const matched = new Set<number>();
+    for (const [legacyKey, group] of byLegacyKey) {
+      for (const entry of group) {
+        if (entry.exactKey && take(exactBuckets, "exact", entry.exactKey) !== null) {
+          matched.add(entry.index);
+        }
+      }
+      for (const entry of group) {
+        if (!entry.exactKey || matched.has(entry.index)) continue;
+        const index = take(legacyBuckets, "legacy", legacyKey);
+        if (index === null) continue;
+        const executionId = entry.run.execution_id;
+        if (!validExecutionId(executionId)) continue;
+        matched.add(entry.index);
+        const upgraded: RunRecord = { ...runs[index]!, execution_id: executionId };
+        if (entry.run.attempt === undefined) delete upgraded.attempt;
+        else upgraded.attempt = entry.run.attempt;
+        runs[index] = upgraded;
+        legacyIndexes.delete(index);
+        addToBucket(exactBuckets, entry.exactKey, index);
+      }
+      for (const entry of group) {
+        if (entry.exactKey || matched.has(entry.index)) continue;
+        if (
+          take(legacyBuckets, "legacy", legacyKey) !== null ||
+          take(anyBuckets, "any", legacyKey) !== null
+        ) {
+          matched.add(entry.index);
+        }
+      }
+    }
+
+    for (const entry of pending) {
+      if (matched.has(entry.index)) continue;
+      const index = runs.length;
+      runs.push(entry.run);
+      addToBucket(anyBuckets, entry.legacyKey, index);
+      if (entry.exactKey) addToBucket(exactBuckets, entry.exactKey, index);
+      else {
+        addToBucket(legacyBuckets, entry.legacyKey, index);
+        legacyIndexes.add(index);
+      }
     }
   }
   return { runs: chronological(runs), corruptLines, corruptFiles };

@@ -60,10 +60,10 @@ describe("baseline update -> ci --baseline", () => {
     const update = runCli(["baseline", "update", suite, "--commit", "v1", "--baseline", baseline()]);
     expect(update.status).toBe(0);
     expect(JSON.parse(readFileSync(baseline(), "utf8"))).toEqual({
-      schema_version: 1,
+      schema_version: 2,
       tests: [
-        { test_id: PROMO, lower_bound_score: 0.5 },
-        { test_id: INVENTORY, lower_bound_score: 0.1667 },
+        { test_id: PROMO, gating_score: 0.5 },
+        { test_id: INVENTORY, gating_score: 0.1667 },
       ],
     });
 
@@ -75,7 +75,7 @@ describe("baseline update -> ci --baseline", () => {
   it("fails only on the test the baseline does not know about", () => {
     writeFileSync(
       baseline(),
-      JSON.stringify({ schema_version: 1, tests: [{ test_id: INVENTORY, lower_bound_score: 0.1 }] }),
+      JSON.stringify({ schema_version: 2, tests: [{ test_id: INVENTORY, gating_score: 0.2 }] }),
     );
     const gate = runCli(["ci", suite, "--commit", "v1", "--fail-above", "0.1", "--baseline", baseline()]);
     expect(gate.status).toBe(1);
@@ -88,25 +88,25 @@ describe("baseline update -> ci --baseline", () => {
   it("reports the same breach set in --json under baselined_breaches", () => {
     writeFileSync(
       baseline(),
-      JSON.stringify({ schema_version: 1, tests: [{ test_id: INVENTORY, lower_bound_score: 0.1 }] }),
+      JSON.stringify({ schema_version: 2, tests: [{ test_id: INVENTORY, gating_score: 0.2 }] }),
     );
     const { status, stdout } = runCli([
       "ci", suite, "--commit", "v1", "--fail-above", "0.1", "--baseline", baseline(), "--json",
     ]);
     expect(status).toBe(1);
     const report = JSON.parse(stdout) as Report & { baselined_breaches: { test_id: string }[] };
-    expect(report.schema_version).toBe(1);
-    expect(report.baselined_breaches).toEqual([{ test_id: INVENTORY, lower_bound_score: 0.1667 }]);
+    expect(report.schema_version).toBe(2);
+    expect(report.baselined_breaches).toEqual([{ test_id: INVENTORY, gating_score: 0.1667 }]);
   });
 
   it("reports a test that recovered since the baseline was taken", () => {
     writeFileSync(
       baseline(),
       JSON.stringify({
-        schema_version: 1,
+        schema_version: 2,
         tests: [
-          { test_id: PROMO, lower_bound_score: 0.5 },
-          { test_id: "checkout > long fixed", lower_bound_score: 0.9 },
+          { test_id: PROMO, gating_score: 0.5 },
+          { test_id: "checkout > long fixed", gating_score: 0.9 },
         ],
       }),
     );
@@ -298,7 +298,7 @@ describe("--format markdown", () => {
     expect(stdout).toContain("### Top offenders");
     expect(stdout).toContain(`| 1 | \`${PROMO}\` | 1.000 | 0.500 | very_flaky | timeout |`);
     // No baseline given: no status column on the offenders table, no recovered line.
-    expect(stdout).toContain("| rank | test | score | lower bound | verdict | likely cause |\n");
+    expect(stdout).toContain("| rank | test | score | gating score | verdict | likely cause |\n");
     expect(stdout).not.toContain("likely cause | status |");
     expect(stdout).not.toContain("Recovered:");
   });

@@ -10,7 +10,16 @@ import {
   readHistory,
   warnCorrupt,
 } from "../ingest.js";
-import { buildReport, flakyRanked, renderGithub, renderHuman, renderMarkdown, type Report } from "../report.js";
+import {
+  buildReport,
+  flakyRanked,
+  isWithinBaseline,
+  renderGithub,
+  renderHuman,
+  renderMarkdown,
+  type Baseline,
+  type Report,
+} from "../report.js";
 import { groupByTestAndVersion } from "../score.js";
 import { loadAi } from "./lazy-ai.js";
 import { numberOption, parseProvider, parseScoreParams, type ReportOptions, type ScoreParams } from "./options.js";
@@ -31,7 +40,7 @@ async function tryExplain(
   report: Report,
   chosen: ProviderName | undefined,
   top: number,
-  baseline: ReadonlySet<string> | null,
+  baseline: Baseline | null,
 ): Promise<AiAnalysis | null> {
   try {
     const { requireProvider, explain } = await loadAi();
@@ -132,10 +141,9 @@ export async function runReport(
   const { report, files } = loadReport(inputs, values, params);
   const ai = values.explain ? await tryExplain(report, provider, explainTop, baseline) : null;
 
-  const overThreshold =
-    failAbove === null ? [] : report.tests.filter((t) => t.lower_bound_score > failAbove);
-  const baselinedBreaches = overThreshold.filter((t) => baseline?.has(t.test_id));
-  const newBreaches = overThreshold.filter((t) => !baseline?.has(t.test_id));
+  const overThreshold = failAbove === null ? [] : report.tests.filter((t) => t.gating_score > failAbove);
+  const baselinedBreaches = overThreshold.filter((t) => baseline !== null && isWithinBaseline(t, baseline));
+  const newBreaches = overThreshold.filter((t) => baseline === null || !isWithinBaseline(t, baseline));
 
   if (values.json) {
     process.stdout.write(
@@ -146,7 +154,7 @@ export async function runReport(
             ? {
                 baselined_breaches: baselinedBreaches.map((t) => ({
                   test_id: t.test_id,
-                  lower_bound_score: t.lower_bound_score,
+                  gating_score: t.gating_score,
                 })),
               }
             : {}),
@@ -195,14 +203,14 @@ export async function runReport(
     if (baselinedBreaches.length > 0) {
       process.stderr.write(
         `\nbaselined (known flaky): ${baselinedBreaches.length} test${baselinedBreaches.length === 1 ? "" : "s"}\n` +
-          baselinedBreaches.map((t) => `  ${t.test_id} — ${t.lower_bound_score}`).join("\n") +
+          baselinedBreaches.map((t) => `  ${t.test_id} — ${t.gating_score}`).join("\n") +
           "\n",
       );
     }
     if (newBreaches.length > 0) {
       process.stderr.write(
-        `\n${newBreaches.length} test(s) above --fail-above ${failAbove} (by lower_bound_score):\n` +
-          newBreaches.map((t) => `  ${t.test_id} — ${t.lower_bound_score}`).join("\n") +
+        `\n${newBreaches.length} test(s) above --fail-above ${failAbove} (by gating_score):\n` +
+          newBreaches.map((t) => `  ${t.test_id} — ${t.gating_score}`).join("\n") +
           "\n",
       );
       return 1;

@@ -143,7 +143,10 @@ const SCORE_PROPS = {
   metric: { type: "string", enum: ["flipRate", "entropy"], description: "Default flipRate." },
   model: { type: "string", enum: ["weighted", "unweighted"], description: "Default weighted." },
   lam: { type: "number", description: "EWMA decay in (0, 1], default 0.1." },
-  min_reruns: { type: "number", description: "Below this run count a test is low_data, default 2." },
+  min_reruns: {
+    type: "number",
+    description: "Some version must have this many independent executions; otherwise low_data, default 2.",
+  },
 } as const;
 
 const TOOLS: Tool[] = [
@@ -151,8 +154,8 @@ const TOOLS: Tool[] = [
     name: "analyze_history",
     description:
       "Score a whole test-run history and return the full deterministic flakiness report as JSON " +
-      "(schema_version 1): summary counts, the scoring params used, and every test ranked with score, " +
-      "confidence, lower_bound_score, verdict, evidence and a keyword-heuristic likely cause. " +
+      "(schema_version 2): summary counts, the scoring params used, and every test ranked with score, " +
+      "confidence, gating_score, independent_runs, verdict, evidence and a keyword-heuristic likely cause. " +
       "Use this first, whenever you need the overall picture of which tests are flaky and how badly, " +
       "before drilling into any single test. Pass history_path (a JSONL history file), inputs (JUnit XML / " +
       "JSON / CSV paths or globs), or both; both are read-only — nothing is written, appended or created. " +
@@ -173,7 +176,7 @@ const TOOLS: Tool[] = [
   {
     name: "get_test_evidence",
     description:
-      "Return the single report object for one test_id: rank, score, confidence, lower_bound_score, verdict, " +
+      "Return the single report object for one test_id: rank, score, confidence, gating_score, independent_runs, verdict, " +
       "run/version counts and the deterministic evidence block (outcome flips, within-version flips, duration " +
       "variance, failure clusters) plus the heuristic likely cause and its recommendation. " +
       "Use it once analyze_history has named a suspect and you want that test's evidence without re-reading " +

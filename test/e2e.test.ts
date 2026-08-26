@@ -322,7 +322,7 @@ describe("--explain against the Claude API (mock server)", () => {
         }),
     );
     const report = JSON.parse(result.stdout) as Report & { ai_analysis: Record<string, unknown> };
-    expect(report.schema_version).toBe(1);
+    expect(report.schema_version).toBe(2);
     expect(report.ai_analysis).toEqual({
       provider: "claude",
       model: "claude-opus-5",
@@ -399,8 +399,8 @@ describe("--explain against the Claude API (mock server)", () => {
     writeFileSync(
       baseline,
       JSON.stringify({
-        schema_version: 1,
-        tests: [{ test_id: TOP_TEST, lower_bound_score: 0.5 }],
+        schema_version: 2,
+        tests: [{ test_id: TOP_TEST, gating_score: 0.5 }],
       }),
     );
     const requests = await withServer(
@@ -567,7 +567,7 @@ describe("--explain without a usable provider", () => {
   it("still emits parseable JSON with no ai_analysis field", async () => {
     const { stdout } = await runCli(["analyze", suite, "--commit", "v1", "--json", "--explain"]);
     const report = JSON.parse(stdout) as Report & { ai_analysis?: unknown };
-    expect(report.schema_version).toBe(1);
+    expect(report.schema_version).toBe(2);
     expect(report.ai_analysis).toBeUndefined();
   });
 });

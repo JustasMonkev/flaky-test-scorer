@@ -1,4 +1,4 @@
-import type { RunRecord } from "../score.js";
+import { validExecutionId, type RunRecord } from "../score.js";
 import { cleanTestId, firstValue, normalizeResult, numberOrNull, stripBom } from "./common.js";
 
 /** Minimal RFC4180-ish CSV reader (quotes, embedded commas/newlines, CRLF). */
@@ -63,6 +63,7 @@ export const CONSUMED_ROW_KEYS: ReadonlySet<string> = new Set([
   ...MESSAGE_KEYS,
   "source_file",
   "attempt",
+  "execution_id",
 ]);
 
 /** Normalize alias-bearing row objects (from JSON or CSV) into runs. */
@@ -89,7 +90,8 @@ export function runsFromRows(
     const failureMessage = firstValue(row, MESSAGE_KEYS);
     const sourceFile = row["source_file"];
     const attempt = numberOrNull(row["attempt"]);
-    runs.push({
+    const executionId = validExecutionId(row["execution_id"]) ? row["execution_id"] : null;
+    const run: RunRecord = {
       test_id: cleanId,
       result,
       version: version === null ? fallbackVersion : String(version),
@@ -97,9 +99,11 @@ export function runsFromRows(
       duration_s: numberOrNull(firstValue(row, DURATION_KEYS)),
       failure_message: typeof failureMessage === "string" ? failureMessage : null,
       source_file: typeof sourceFile === "string" ? sourceFile : fallbackFile,
-      // Kept only when present, so v1 history lines round-trip byte-identically.
-      ...(attempt === null ? {} : { attempt }),
-    });
+    };
+    // Kept only when present, so v1 history lines round-trip byte-identically.
+    if (attempt !== null) run.attempt = attempt;
+    if (executionId !== null) run.execution_id = executionId;
+    runs.push(run);
   }
   return runs;
 }

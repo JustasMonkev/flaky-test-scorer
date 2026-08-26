@@ -1,22 +1,28 @@
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { buildEvidence, durationStats } from "../src/evidence.js";
 import { readHistory } from "../src/ingest.js";
-import { groupByTestAndVersion } from "../src/score.js";
+import { groupByTestAndVersion, groupIndependentRuns } from "../src/score.js";
 import Reporter, { playwrightTestId } from "../src/reporter/playwright.js";
 
 const rootDir = "/repo";
 const historyIn = () => join(mkdtempSync(join(tmpdir(), "fts-rep-")), "history.jsonl");
 
 // Structural stand-ins for Playwright's TestCase / TestResult / Suite.
-function testCase(opts: { file: string; project?: string; describes?: string[]; title: string }) {
+function testCase(opts: { file: string; project?: string; describes?: string[]; title: string; id?: string; repeatEachIndex?: number }) {
   let parent: any = { title: "", type: "root" };
   parent = { title: opts.project ?? "", type: "project", parent };
   parent = { title: opts.file, type: "file", parent };
   for (const d of opts.describes ?? []) parent = { title: d, type: "describe", parent };
-  return { title: opts.title, parent, location: { file: join(rootDir, opts.file) } };
+  return {
+    id: opts.id ?? `${opts.file}:${opts.title}:${opts.repeatEachIndex ?? 0}`,
+    repeatEachIndex: opts.repeatEachIndex ?? 0,
+    title: opts.title,
+    parent,
+    location: { file: join(rootDir, opts.file) },
+  };
 }
 
 function result(opts: {
@@ -213,12 +219,32 @@ describe("retry attempts (SPEC-V3 F2/F5)", () => {
     expect(evidence.within_run_retries).toBe(1);
   });
 
-  it("omits attempt for a test that never retried, keeping the v1 record shape", () => {
+  it("keeps parallel repeatEach retry chains separate", () => {
+    const path = historyIn();
+    const reporter = new Reporter({ history: path, commit: "c1" });
+    reporter.onBegin({ rootDir });
+    const first = testCase({ file: "tests/login.spec.ts", project: "chromium", title: "logs in", id: "first", repeatEachIndex: 0 });
+    const second = testCase({ file: "tests/login.spec.ts", project: "chromium", title: "logs in", id: "second", repeatEachIndex: 1 });
+    reporter.onTestEnd(first, result({ retry: 0, status: "failed", startTime: new Date("2024-01-01T00:00:01Z") }));
+    reporter.onTestEnd(second, result({ retry: 0, status: "failed", startTime: new Date("2024-01-01T00:00:02Z") }));
+    reporter.onTestEnd(first, result({ retry: 1, status: "passed", startTime: new Date("2024-01-01T00:00:03Z") }));
+    reporter.onTestEnd(second, result({ retry: 1, status: "passed", startTime: new Date("2024-01-01T00:00:04Z") }));
+    reporter.onEnd();
+
+    const runs = readHistory(path).runs;
+    expect(new Set(runs.map((run) => run.execution_id)).size).toBe(2);
+    const versions = groupByTestAndVersion(runs).get(runs[0]!.test_id)!;
+    expect(groupIndependentRuns(versions.get("c1")!)).toHaveLength(2);
+  });
+
+  it("records execution identity for a test that never retried", () => {
     const path = historyIn();
     const reporter = new Reporter({ history: path, commit: "c1" });
     reporter.onBegin({ rootDir });
     reporter.onTestEnd(login, result({ retry: 0, status: "passed" }));
     reporter.onEnd();
-    expect(readFileSync(path, "utf8")).not.toContain("attempt");
+    const [run] = readHistory(path).runs;
+    expect(run).toMatchObject({ attempt: 0 });
+    expect(run!.execution_id).toMatch(/^[A-Za-z0-9._:-]{1,128}$/);
   });
 });
