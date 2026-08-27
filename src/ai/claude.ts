@@ -47,5 +47,8 @@ function claudeError(e: unknown): ProviderError {
     return new ProviderError("Could not reach the Claude API (connection error).", "claude");
   if (e instanceof Anthropic.APIError)
     return new ProviderError(`Claude API error (${e.status ?? "unknown"}): ${e.message}`, "claude");
-  return new ProviderError(`Claude request failed: ${(e as Error).message}`, "claude");
+  return new ProviderError(
+    `Claude request failed: ${e instanceof Error ? e.message : String(e)}`,
+    "claude",
+  );
 }

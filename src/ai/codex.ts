@@ -34,5 +34,8 @@ function codexError(e: unknown): ProviderError {
     return new ProviderError("Could not reach the OpenAI API (connection error).", "codex");
   if (e instanceof OpenAI.APIError)
     return new ProviderError(`OpenAI API error (${e.status ?? "unknown"}): ${e.message}`, "codex");
-  return new ProviderError(`Codex request failed: ${(e as Error).message}`, "codex");
+  return new ProviderError(
+    `Codex request failed: ${e instanceof Error ? e.message : String(e)}`,
+    "codex",
+  );
 }

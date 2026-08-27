@@ -99,10 +99,11 @@ export default class FlakyHistoryReporter {
     const startTime =
       result.startTime instanceof Date ? result.startTime.toISOString() : (result.startTime ?? null);
     const file = test.location?.file ? posixRel(this.rootDir, test.location.file) : null;
-    const caseId = test.id ?? `${playwrightTestId(test, this.rootDir)}:${test.repeatEachIndex ?? 0}`;
+    const testId = playwrightTestId(test, this.rootDir);
+    const caseId = test.id ?? `${testId}:${test.repeatEachIndex ?? 0}`;
 
     this.pending.push({
-      test_id: playwrightTestId(test, this.rootDir),
+      test_id: testId,
       result: !failed,
       version: null, // filled in at onEnd, where a single commit lookup covers the run
       timestamp: startTime,

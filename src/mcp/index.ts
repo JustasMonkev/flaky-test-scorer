@@ -16,9 +16,9 @@ import { buildReport, type Report, type ReportTest } from "../report.js";
 import { SCORE_DEFAULTS, groupByTestAndVersion, type RunRecord } from "../score.js";
 
 // Resolves to the package root from both src/mcp/ (vitest) and dist/mcp/ (published).
-const { version } = JSON.parse(
-  readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
-) as { version: string };
+const packageJson = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
+// SAFETY: package.json is bundled with this package and declares a string version.
+const { version } = packageJson as { version: string };
 
 const warn = (message: string): void => void process.stderr.write(`flaky-test-scorer mcp: ${message}\n`);
 
@@ -44,10 +44,11 @@ function requireString(args: Args, key: string): string {
 function optEnum<T extends string>(args: Args, key: string, allowed: readonly T[], fallback: T): T {
   const value = optString(args, key);
   if (value === undefined) return fallback;
-  if (!allowed.includes(value as T)) {
+  const selected = allowed.find((candidate) => candidate === value);
+  if (selected === undefined) {
     throw new InputError(`${key} must be one of: ${allowed.join(", ")} (got "${value}")`);
   }
-  return value as T;
+  return selected;
 }
 
 function optNumber(args: Args, key: string, fallback: number, ok: (n: number) => boolean, hint: string): number {
@@ -61,10 +62,10 @@ function optNumber(args: Args, key: string, fallback: number, ok: (n: number) =>
 function optStrings(args: Args, key: string): string[] {
   const value = args[key];
   if (value === undefined || value === null) return [];
-  if (!Array.isArray(value) || value.some((v) => typeof v !== "string" || v.trim() === "")) {
+  if (!Array.isArray(value) || !value.every((v): v is string => typeof v === "string" && v.trim() !== "")) {
     throw new InputError(`${key} must be an array of non-empty strings`);
   }
-  return value as string[];
+  return value;
 }
 
 // ------------------------------------------------------------------ tool bodies
@@ -236,7 +237,7 @@ export function createMcpServer(): Server {
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: TOOLS }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
-    const args = (request.params.arguments ?? {}) as Args;
+    const args = request.params.arguments ?? {};
     try {
       switch (request.params.name) {
         case "analyze_history":
@@ -251,7 +252,7 @@ export function createMcpServer(): Server {
     } catch (err) {
       // Bad input, a missing file or a dead provider come back as tool errors:
       // a long-lived server must survive every one of them.
-      return fail((err as Error).message);
+      return fail(err instanceof Error ? err.message : String(err));
     }
   });
 

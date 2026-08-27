@@ -4,7 +4,7 @@ import { SCORE_DEFAULTS, type Metric, type Model } from "../score.js";
 
 export const DEFAULT_BASELINE = ".flaky-baseline.json";
 
-const PROVIDERS: ProviderName[] = ["claude", "codex"];
+const PROVIDERS = ["claude", "codex"] as const;
 
 /** Finite-number option. Range checks belong at the call site — this one has none. */
 export function numberOption(raw: string | undefined, name: string, fallback: number): number {
@@ -15,10 +15,11 @@ export function numberOption(raw: string | undefined, name: string, fallback: nu
 }
 
 export function asProvider(raw: string, what: string): ProviderName {
-  if (!PROVIDERS.includes(raw as ProviderName)) {
+  const provider = PROVIDERS.find((candidate) => candidate === raw);
+  if (provider === undefined) {
     throw new InputError(`${what} must be claude, codex or auto, got "${raw}"`);
   }
-  return raw as ProviderName;
+  return provider;
 }
 
 /**
@@ -57,14 +58,12 @@ export interface ScoreParams {
 
 export function parseScoreParams(values: ReportOptions): ScoreParams {
   const raw = values.metric ?? SCORE_DEFAULTS.metric;
-  // Canonicalized, not echoed: the accepted spelling is case-insensitive but
-  // `params.metric` is part of the stable JSON schema, so `--metric FLIPRATE`
-  // must not put "FLIPRATE" in it.
-  const metric = (
-    raw.toLowerCase() === "fliprate" ? "flipRate" : raw.toLowerCase() === "entropy" ? "entropy" : null
-  ) as Metric | null;
-  if (metric === null) throw new InputError(`--metric must be flipRate or entropy, got "${raw}"`);
-  const model = (values.model ?? SCORE_DEFAULTS.model) as Model;
+  const metricName = raw.toLowerCase();
+  if (metricName !== "fliprate" && metricName !== "entropy") {
+    throw new InputError(`--metric must be flipRate or entropy, got "${raw}"`);
+  }
+  const metric: Metric = metricName === "fliprate" ? "flipRate" : "entropy";
+  const model = values.model ?? SCORE_DEFAULTS.model;
   if (model !== "weighted" && model !== "unweighted") {
     throw new InputError(`--model must be weighted or unweighted, got "${model}"`);
   }

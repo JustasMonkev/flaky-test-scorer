@@ -1,7 +1,7 @@
 import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, writeSync } from "node:fs";
 import { compareKeys, timestampKey, validExecutionId, type RunRecord } from "../score.js";
 import { InputError, relPosix, stripBom, writeAtomic } from "./common.js";
-import { CONSUMED_ROW_KEYS, runsFromRows } from "./rows.js";
+import { CONSUMED_ROW_KEYS, runFromRow } from "./rows.js";
 
 export interface HistoryRead {
   runs: RunRecord[];
@@ -28,8 +28,9 @@ export function readHistory(path: string): HistoryRead {
   for (const line of text.split("\n")) {
     if (line.trim() === "") continue;
     try {
+      // SAFETY: runFromRow validates parsed JSON before the row is inspected below.
       const row = JSON.parse(line) as Record<string, unknown>;
-      const [run] = runsFromRows([row], null, null);
+      const run = runFromRow(row, null, null);
       if (!run) {
         corruptLines++;
         continue;

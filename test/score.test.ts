@@ -186,6 +186,16 @@ describe("groupByTestAndVersion", () => {
     expect([...grouped.get("a")!.keys()]).toEqual(["v1", "v2"]);
     expect([...grouped.get("b")!.keys()]).toEqual(["__all__"]);
   });
+
+  it("keeps test and version insertion order chronological", () => {
+    const grouped = groupByTestAndVersion([
+      run({ test_id: "b", result: P, version: "v1", timestamp: 3 }),
+      run({ test_id: "a", result: P, version: "v2", timestamp: 2 }),
+      run({ test_id: "a", result: F, version: "v1", timestamp: 1 }),
+    ]);
+    expect([...grouped.keys()]).toEqual(["a", "b"]);
+    expect([...grouped.get("a")!.keys()]).toEqual(["v1", "v2"]);
+  });
 });
 
 describe("scoreTests parity", () => {

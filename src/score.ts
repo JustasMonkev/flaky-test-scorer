@@ -107,7 +107,6 @@ function weightedMean(values: number[], weights: number[] | undefined): number {
 
 /** Mean of per-version scores. Optional weights are independent run counts. */
 export function aggregateUnweighted(versionScores: number[], weights?: number[]): number {
-  if (versionScores.length === 0) return 0;
   return weightedMean(versionScores, weights);
 }
 
@@ -137,26 +136,12 @@ export function confidence(
   versionScores: number[],
   weights?: number[],
 ): number {
-  const count = Math.max(totalRuns, 1);
-  const dataFactor = 1 - 1 / Math.sqrt(count);
+  const dataFactor = 1 - 1 / Math.sqrt(Math.max(totalRuns, 1));
+  if (versionScores.length < 2) return round4(dataFactor);
 
-  let stabilityFactor = 1;
-  if (versionScores.length >= 2) {
-    const usableWeights = sampleWeights(versionScores, weights);
-    const denominator = usableWeights?.reduce((a, weight) => a + weight, 0) ?? versionScores.length;
-    const mean = usableWeights
-      ? versionScores.reduce((sum, score, index) => sum + score * usableWeights[index]!, 0) / denominator
-      : versionScores.reduce((a, b) => a + b, 0) / versionScores.length;
-    const variance =
-      usableWeights
-        ? versionScores.reduce(
-            (sum, score, index) => sum + usableWeights[index]! * (score - mean) ** 2,
-            0,
-          ) / denominator
-        : versionScores.reduce((a, s) => a + (s - mean) ** 2, 0) / versionScores.length;
-    stabilityFactor = Math.max(0, 1 - Math.sqrt(variance));
-  }
-  return round4(dataFactor * stabilityFactor);
+  const mean = weightedMean(versionScores, weights);
+  const variance = weightedMean(versionScores.map((score) => (score - mean) ** 2), weights);
+  return round4(dataFactor * Math.max(0, 1 - Math.sqrt(variance)));
 }
 
 export function verdict(score: number): Verdict {
@@ -199,11 +184,13 @@ export const NO_VERSION = "__all__";
 export function groupByTestAndVersion(
   runs: RunRecord[],
 ): Map<string, Map<string, RunRecord[]>> {
-  const decorated = runs.map((run, order) => ({ run, order, key: timestampKey(run.timestamp) }));
-  decorated.sort((a, b) => compareKeys(a.key, b.key) || a.order - b.order);
+  const keys = runs.map((run) => timestampKey(run.timestamp));
+  const order = runs.map((_, index) => index);
+  order.sort((a, b) => compareKeys(keys[a]!, keys[b]!) || a - b);
 
   const byTest = new Map<string, Map<string, RunRecord[]>>();
-  for (const { run } of decorated) {
+  for (const index of order) {
+    const run = runs[index]!;
     let versions = byTest.get(run.test_id);
     if (!versions) byTest.set(run.test_id, (versions = new Map()));
     const version = run.version ?? NO_VERSION;

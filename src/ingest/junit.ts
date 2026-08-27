@@ -35,6 +35,7 @@ function collectSuites(node: XmlNode, out: XmlNode[]): void {
 function nodeText(node: unknown): string {
   if (typeof node === "string") return node;
   if (node && typeof node === "object") {
+    // SAFETY: parsed XML nodes use string-keyed object attributes and text fields.
     const n = node as XmlNode;
     return [n["@_message"], n["@_type"], n["#text"]].filter(Boolean).map(String).join(": ");
   }
@@ -51,13 +52,14 @@ export function parseJUnit(xml: string, file: string, version: string | null): R
     );
   }
 
+  // SAFETY: XMLValidator accepted this document, so the parser returns an XML object root.
   const root = xmlParser.parse(text) as XmlNode;
   const suites: XmlNode[] = [];
   collectSuites(root, suites);
 
   const runs: RunRecord[] = [];
   for (const suite of suites) {
-    const suiteTimestamp = (suite["@_timestamp"] as string | undefined) ?? null;
+    const suiteTimestamp = typeof suite["@_timestamp"] === "string" ? suite["@_timestamp"] : null;
     for (const testcase of asArray(suite["testcase"])) {
       if (testcase["skipped"] !== undefined) continue;
       const name = String(testcase["@_name"] ?? "").trim();
@@ -94,13 +96,14 @@ export function parseJUnit(xml: string, file: string, version: string | null): R
         });
       });
 
-      runs.push({
+      const finalRun: RunRecord = {
         ...base,
         result: !failed,
         duration_s: numberOrNull(testcase["@_time"]),
         failure_message: message,
-        ...(retries.length > 0 ? { attempt: retries.length } : {}),
-      });
+      };
+      if (retries.length > 0) finalRun.attempt = retries.length;
+      runs.push(finalRun);
     }
   }
   return runs;
