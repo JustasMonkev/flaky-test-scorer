@@ -33,6 +33,17 @@ export function isWithinBaseline(
   return baseline.has(test.test_id) && test.gating_score <= baseline.get(test.test_id)!;
 }
 
+export type BaselineStatus = "new" | "regression" | "baselined";
+
+/** Where a flaky test stands against the baseline — one wording for every surface. */
+export function baselineStatus(
+  test: Pick<ReportTest, "test_id" | "gating_score">,
+  baseline: Baseline,
+): BaselineStatus {
+  if (isWithinBaseline(test, baseline)) return "baselined";
+  return baseline.has(test.test_id) ? "regression" : "new";
+}
+
 export function buildReport(
   grouped: Map<string, Map<string, RunRecord[]>>,
   options: BuildOptions,
@@ -66,9 +77,9 @@ const flakinessLine = (s: Report["summary"]): string =>
   `${plural(s.flaky, "test")} show${s.flaky === 1 ? "s" : ""} flakiness (${s.very_flaky} very flaky), ${plural(s.low_data, "test")} need${s.low_data === 1 ? "s" : ""} more data.`;
 
 function baselineCounts(flaky: ReportTest[], baseline: Baseline) {
-  const baselined = flaky.filter((t) => isWithinBaseline(t, baseline)).length;
-  const regressions = flaky.filter((t) => baseline.has(t.test_id) && !isWithinBaseline(t, baseline)).length;
-  return { newly: flaky.length - baselined - regressions, regressions, baselined };
+  const tally: Record<BaselineStatus, number> = { new: 0, regression: 0, baselined: 0 };
+  for (const test of flaky) tally[baselineStatus(test, baseline)]++;
+  return { newly: tally.new, regressions: tally.regression, baselined: tally.baselined };
 }
 
 const baselineLine = ({ newly, regressions, baselined }: ReturnType<typeof baselineCounts>): string =>
@@ -141,7 +152,7 @@ export function renderHuman(
   for (const test of suspects) {
     out.push("");
     out.push(
-      `#${test.rank}  ${test.verdict}  score ${test.score.toFixed(3)}  conf ${test.confidence.toFixed(2)}  gating score ${test.gating_score.toFixed(3)}${test.low_data ? "  [LOW DATA]" : ""}${baseline ? (isWithinBaseline(test, baseline) ? "  [BASELINED]" : baseline.has(test.test_id) ? "  [REGRESSION]" : "  [NEW]") : ""}`,
+      `#${test.rank}  ${test.verdict}  score ${test.score.toFixed(3)}  conf ${test.confidence.toFixed(2)}  gating score ${test.gating_score.toFixed(3)}${test.low_data ? "  [LOW DATA]" : ""}${baseline ? `  [${baselineStatus(test, baseline).toUpperCase()}]` : ""}`,
     );
     out.push(`    ${test.test_id}`);
     for (const line of evidenceLines(test)) out.push(`    - ${line}`);
@@ -227,7 +238,7 @@ export function renderMarkdown(
       `| --- | --- | --- | --- | --- | --- |${baseline ? " --- |" : ""}`,
       ...suspects.map(
         (t) =>
-          `| ${t.rank} | ${mdCode(t.test_id)} | ${t.score.toFixed(3)} | ${t.gating_score.toFixed(3)} | ${t.verdict} | ${t.likely_cause.category} |${baseline ? ` ${isWithinBaseline(t, baseline) ? "baselined" : baseline.has(t.test_id) ? "regression" : "new"} |` : ""}`,
+          `| ${t.rank} | ${mdCode(t.test_id)} | ${t.score.toFixed(3)} | ${t.gating_score.toFixed(3)} | ${t.verdict} | ${t.likely_cause.category} |${baseline ? ` ${baselineStatus(t, baseline)} |` : ""}`,
       ),
     );
   }
@@ -264,7 +275,7 @@ export function renderGithub(
     .slice(0, 10)
     .map(
       (t) =>
-        `| ${t.rank} | ${mdCode(t.test_id)} | ${t.score.toFixed(3)} | ${t.confidence.toFixed(2)} | ${t.gating_score.toFixed(3)} | ${t.verdict} | ${t.likely_cause.category} |${baseline ? ` ${isWithinBaseline(t, baseline) ? "baselined" : baseline.has(t.test_id) ? "regression" : "new"} |` : ""}`,
+        `| ${t.rank} | ${mdCode(t.test_id)} | ${t.score.toFixed(3)} | ${t.confidence.toFixed(2)} | ${t.gating_score.toFixed(3)} | ${t.verdict} | ${t.likely_cause.category} |${baseline ? ` ${baselineStatus(t, baseline)} |` : ""}`,
     );
 
   const counts = baseline ? baselineCounts(flaky, baseline) : null;

@@ -107,7 +107,6 @@ function weightedMean(values: number[], weights: number[] | undefined): number {
 
 /** Mean of per-version scores. Optional weights are independent run counts. */
 export function aggregateUnweighted(versionScores: number[], weights?: number[]): number {
-  if (versionScores.length === 0) return 0;
   return weightedMean(versionScores, weights);
 }
 
@@ -137,26 +136,12 @@ export function confidence(
   versionScores: number[],
   weights?: number[],
 ): number {
-  const count = Math.max(totalRuns, 1);
-  const dataFactor = 1 - 1 / Math.sqrt(count);
+  const dataFactor = 1 - 1 / Math.sqrt(Math.max(totalRuns, 1));
+  if (versionScores.length < 2) return round4(dataFactor);
 
-  let stabilityFactor = 1;
-  if (versionScores.length >= 2) {
-    const usableWeights = sampleWeights(versionScores, weights);
-    const denominator = usableWeights?.reduce((a, weight) => a + weight, 0) ?? versionScores.length;
-    const mean = usableWeights
-      ? versionScores.reduce((sum, score, index) => sum + score * usableWeights[index]!, 0) / denominator
-      : versionScores.reduce((a, b) => a + b, 0) / versionScores.length;
-    const variance =
-      usableWeights
-        ? versionScores.reduce(
-            (sum, score, index) => sum + usableWeights[index]! * (score - mean) ** 2,
-            0,
-          ) / denominator
-        : versionScores.reduce((a, s) => a + (s - mean) ** 2, 0) / versionScores.length;
-    stabilityFactor = Math.max(0, 1 - Math.sqrt(variance));
-  }
-  return round4(dataFactor * stabilityFactor);
+  const mean = weightedMean(versionScores, weights);
+  const variance = weightedMean(versionScores.map((score) => (score - mean) ** 2), weights);
+  return round4(dataFactor * Math.max(0, 1 - Math.sqrt(variance)));
 }
 
 export function verdict(score: number): Verdict {
