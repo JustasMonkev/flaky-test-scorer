@@ -47,6 +47,7 @@ export function loadFile(file: string, version: string | null): RunRecord[] {
     }
     if (isPlaywrightReport(data)) return parsePlaywrightReport(data, label, version);
     if (data && !Array.isArray(data) && typeof data === "object") {
+      // SAFETY: the guard above narrows data to a non-null, non-array object.
       const obj = data as Record<string, unknown>;
       data = obj["runs"] ?? obj["results"];
     }
@@ -83,6 +84,7 @@ export function detectCommit(): string | null {
   try {
     return execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null;
   } catch {
+    // A checkout is optional; no Git metadata means the run has no version.
     return null;
   }
 }

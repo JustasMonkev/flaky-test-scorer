@@ -3,8 +3,10 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ProviderName } from "./types.js";
 
-interface Config {
-  providers?: Partial<Record<ProviderName, { api_key?: string }>>;
+type Config = Record<string, unknown>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function configPath(): string {
@@ -27,10 +29,14 @@ function chmodQuiet(file: string, mode: number): void {
 function readConfig(): Config {
   try {
     const parsed: unknown = JSON.parse(readFileSync(configPath(), "utf8"));
-    return typeof parsed === "object" && parsed !== null ? (parsed as Config) : {};
+    return isRecord(parsed) ? parsed : {};
   } catch {
     return {}; // missing or corrupt config is simply "no stored keys"
   }
+}
+
+function providersIn(config: Config): Record<string, unknown> {
+  return isRecord(config["providers"]) ? config["providers"] : {};
 }
 
 function writeConfig(cfg: Config): void {
@@ -41,7 +47,10 @@ function writeConfig(cfg: Config): void {
 }
 
 export function storedKey(provider: ProviderName): string | undefined {
-  return readConfig().providers?.[provider]?.api_key || undefined;
+  const entry = providersIn(readConfig())[provider];
+  return isRecord(entry) && typeof entry["api_key"] === "string" && entry["api_key"]
+    ? entry["api_key"]
+    : undefined;
 }
 
 /** masked tail, e.g. "...xY9z" — the only key material ever surfaced */
@@ -52,12 +61,22 @@ export function maskTail(key: string): string {
 
 export function setKey(provider: ProviderName, key: string): void {
   const cfg = readConfig();
-  cfg.providers = { ...cfg.providers, [provider]: { api_key: key } };
+  const providers = providersIn(cfg);
+  const previous = providers[provider];
+  cfg["providers"] = {
+    ...providers,
+    [provider]: { ...(isRecord(previous) ? previous : {}), api_key: key },
+  };
   writeConfig(cfg);
 }
 
 export function clearKey(provider: ProviderName): void {
   const cfg = readConfig();
-  if (cfg.providers) delete cfg.providers[provider];
+  const current = cfg["providers"];
+  if (isRecord(current)) {
+    const providers = { ...current };
+    delete providers[provider];
+    cfg["providers"] = providers;
+  }
   writeConfig(cfg);
 }

@@ -239,6 +239,58 @@ describe("config store", () => {
     writeFileSync(join(dir, "config.json"), "{not json");
     expect(authStatus().every((s) => !s.available)).toBe(true);
   });
+
+  it("treats a malformed provider entry as no stored key", () => {
+    const dir = join(configHome, "flaky-test-scorer");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ providers: { claude: { api_key: 42 } } }));
+    expect(authStatus().every((s) => !s.available)).toBe(true);
+  });
+
+  it("keeps unknown config fields when setting and clearing a key", () => {
+    const dir = join(configHome, "flaky-test-scorer");
+    const file = join(dir, "config.json");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      file,
+      JSON.stringify({
+        schema_version: 9,
+        providers: {
+          claude: { api_key: "old", note: "keep" },
+          future: { token: "future-token" },
+        },
+      }),
+    );
+
+    setKey("claude", "new");
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({
+      schema_version: 9,
+      providers: {
+        claude: { api_key: "new", note: "keep" },
+        future: { token: "future-token" },
+      },
+    });
+
+    clearKey("claude");
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({
+      schema_version: 9,
+      providers: { future: { token: "future-token" } },
+    });
+  });
+
+  it("does not invent or replace providers when clearing an unknown shape", () => {
+    const dir = join(configHome, "flaky-test-scorer");
+    const file = join(dir, "config.json");
+    mkdirSync(dir, { recursive: true });
+
+    writeFileSync(file, JSON.stringify({ note: "keep" }));
+    clearKey("claude");
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ note: "keep" });
+
+    writeFileSync(file, JSON.stringify({ providers: ["future-shape"] }));
+    clearKey("claude");
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ providers: ["future-shape"] });
+  });
 });
 
 describe("autoSelectProvider", () => {

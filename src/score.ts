@@ -199,11 +199,13 @@ export const NO_VERSION = "__all__";
 export function groupByTestAndVersion(
   runs: RunRecord[],
 ): Map<string, Map<string, RunRecord[]>> {
-  const decorated = runs.map((run, order) => ({ run, order, key: timestampKey(run.timestamp) }));
-  decorated.sort((a, b) => compareKeys(a.key, b.key) || a.order - b.order);
+  const keys = runs.map((run) => timestampKey(run.timestamp));
+  const order = runs.map((_, index) => index);
+  order.sort((a, b) => compareKeys(keys[a]!, keys[b]!) || a - b);
 
   const byTest = new Map<string, Map<string, RunRecord[]>>();
-  for (const { run } of decorated) {
+  for (const index of order) {
+    const run = runs[index]!;
     let versions = byTest.get(run.test_id);
     if (!versions) byTest.set(run.test_id, (versions = new Map()));
     const version = run.version ?? NO_VERSION;

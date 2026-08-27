@@ -16,7 +16,11 @@ export function buildPrompt(input: ExplainInput): string {
 
 export function testIds(input: ExplainInput): string[] {
   return input.tests
-    .map((t) => (t as { test_id?: unknown }).test_id)
+    .map((test) => {
+      if (typeof test !== "object" || test === null || !("test_id" in test)) return undefined;
+      const id = test.test_id;
+      return typeof id === "string" ? id : undefined;
+    })
     .filter((id): id is string => typeof id === "string");
 }
 

@@ -158,7 +158,7 @@ export async function runReport(
                 })),
               }
             : {}),
-          ...(ai ? { ai_analysis: ai } : {}),
+          ...(ai && { ai_analysis: ai }),
         },
         null,
         2,

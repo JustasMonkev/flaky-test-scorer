@@ -17,7 +17,7 @@ export function normalizeResult(raw: unknown): boolean | null {
 }
 
 /** First aliased value that is present and non-blank (keeps 0 / false). */
-export function firstValue(row: Record<string, unknown>, keys: string[]): unknown {
+export function firstValue(row: Record<string, unknown>, keys: readonly string[]): unknown {
   for (const key of keys) {
     if (!(key in row)) continue;
     const value = row[key];
@@ -48,8 +48,19 @@ export const cleanTestId = (raw: string): string =>
  * identity for `source_file`: storage (load), comparison (history) and glob
  * matching must all use the same formula or the double-counting bug returns.
  */
-export const relPosix = (file: string, base = process.cwd()): string =>
-  relative(base, file).split(sep).join("/");
+const REL_POSIX_CACHE_LIMIT = 65_536;
+const relPosixCache = new Map<string, string>();
+
+export function relPosix(file: string, base = process.cwd()): string {
+  const cacheKey = `${base}\u0000${file}`;
+  const cached = relPosixCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  const result = relative(base, file).split(sep).join("/");
+  if (relPosixCache.size >= REL_POSIX_CACHE_LIMIT) relPosixCache.clear();
+  relPosixCache.set(cacheKey, result);
+  return result;
+}
 
 /**
  * The one test-id format: non-empty parts joined with " > ", control characters
