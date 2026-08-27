@@ -8,17 +8,13 @@ inputs:
     required: false
     default: "**/junit*.xml"
   fail-above:
-    description: Fail the job when any test's lower_bound_score exceeds this value. Empty = never fail.
+    description: Fail the job when any test's gating_score exceeds this value. Empty = never fail.
     required: false
     default: ""
   history:
     description: Path to the JSONL history file that accumulates runs across CI runs.
     required: false
     default: .flaky-history.jsonl
-  version:
-    description: npm version/tag of flaky-test-scorer to run.
-    required: false
-    default: latest
   extra-args:
     description: >
       Extra CLI flags, e.g. "--metric entropy --lam 0.05". Forwarded to BOTH the
@@ -66,7 +62,6 @@ runs:
       # Inputs travel as env vars, never as ${{ }} spliced into the shell line:
       # a value containing `; rm -rf /` would otherwise run as a command.
       env:
-        FTS_VERSION: ${{ inputs.version }}
         FTS_INPUT: ${{ inputs.input }}
         FTS_HISTORY: ${{ inputs.history }}
         FTS_FAIL_ABOVE: ${{ inputs.fail-above }}
@@ -78,7 +73,7 @@ runs:
       run: |
         EXPLAIN=""
         if [ "$FTS_EXPLAIN" = "true" ]; then EXPLAIN="--explain"; fi
-        npx --yes "flaky-test-scorer@$FTS_VERSION" ci "$FTS_INPUT" \
+        npx --yes "flaky-test-scorer@2.0.0" ci "$FTS_INPUT" \
           --history "$FTS_HISTORY" \
           --format github \
           $EXPLAIN \
@@ -93,7 +88,6 @@ runs:
       if: ${{ always() && inputs.pr-comment == 'true' && github.event_name == 'pull_request' }}
       shell: bash
       env:
-        FTS_VERSION: ${{ inputs.version }}
         FTS_INPUT: ${{ inputs.input }}
         FTS_HISTORY: ${{ inputs.history }}
         FTS_EXTRA_ARGS: ${{ inputs.extra-args }}
@@ -104,10 +98,16 @@ runs:
       run: |
         set -euo pipefail
         BODY="$RUNNER_TEMP/flaky-comment.md"
-        npx --yes "flaky-test-scorer@$FTS_VERSION" ci "$FTS_INPUT" \
+        # Do not let downloaded npm code read the GitHub write token. Keep it in
+        # a shell-only variable until the package has finished running.
+        GH_TOKEN_VALUE="$GH_TOKEN"
+        unset GH_TOKEN
+        npx --yes "flaky-test-scorer@2.0.0" ci "$FTS_INPUT" \
           --history "$FTS_HISTORY" \
           --format markdown \
           $FTS_EXTRA_ARGS > "$BODY"
+        export GH_TOKEN="$GH_TOKEN_VALUE"
+        unset GH_TOKEN_VALUE
         # The marker on line 1 of the body is how an existing comment is found,
         # so repeated pushes edit one comment instead of stacking new ones.
         # No `| head -1` here: under `pipefail` the early close SIGPIPEs gh and

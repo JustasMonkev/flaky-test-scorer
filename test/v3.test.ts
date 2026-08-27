@@ -15,7 +15,7 @@ import {
   writeBaseline,
   writeHistory,
 } from "../src/ingest.js";
-import { buildReport, renderGithub, renderHuman, renderMarkdown } from "../src/report.js";
+import { buildReport, isWithinBaseline, renderGithub, renderHuman, renderMarkdown } from "../src/report.js";
 import { groupByTestAndVersion, type RunRecord } from "../src/score.js";
 
 // SPEC-V3 F1-F4. Hermetic: temp dirs only, no network, no real PATH lookups.
@@ -24,6 +24,8 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const cli = join(root, "dist", "cli.js");
 const fixtures = join(root, "test", "fixtures");
 const suite = join(fixtures, "suite");
+const PROMO = "checkout > applies promo code";
+const INVENTORY = "checkout > syncs inventory";
 const tmp = () => mkdtempSync(join(tmpdir(), "fts-v3-"));
 
 function runCli(args: string[], env: Record<string, string> = {}) {
@@ -111,7 +113,7 @@ describe("F2: Playwright JSON report ingestion", () => {
   it("turns every results[] entry into one attempt, in order, and drops skipped", () => {
     const runs = loadFile(file, null);
     expect(runs.map((r) => r.result)).toEqual([false, true, true]);
-    expect(runs.map((r) => r.attempt)).toEqual([0, 1, undefined]);
+    expect(runs.map((r) => r.attempt)).toEqual([0, 1, 0]);
     expect(runs[0]!.duration_s).toBe(5.001);
     expect(runs[0]!.failure_message).toContain("Timeout 5000ms exceeded");
     expect(runs[0]!.timestamp).toBe("2024-05-01T10:00:00.000Z");
@@ -184,7 +186,7 @@ describe("F2: within_run_retries evidence", () => {
     const flaky = report.tests.find((t) => t.test_id.endsWith("flakyOne"))!;
     expect(flaky.evidence.within_run_retries).toBe(1);
     expect(flaky.evidence.within_version_flips).toBe(1);
-    expect(report.schema_version).toBe(1);
+    expect(report.schema_version).toBe(2);
   });
 });
 
@@ -200,11 +202,11 @@ describe("F1: baseline update", () => {
     const raw = readFileSync(path, "utf8");
     const parsed = JSON.parse(raw) as {
       schema_version: number;
-      tests: { test_id: string; lower_bound_score: number }[];
+      tests: { test_id: string; gating_score: number }[];
     };
-    expect(parsed.schema_version).toBe(1);
+    expect(parsed.schema_version).toBe(2);
     expect(parsed.tests.length).toBeGreaterThan(0);
-    expect(parsed.tests.every((t) => t.lower_bound_score > 0)).toBe(true);
+    expect(parsed.tests.every((t) => t.gating_score > 0)).toBe(true);
     expect(parsed.tests.map((t) => t.test_id)).toEqual([...parsed.tests.map((t) => t.test_id)].sort());
     expect(raw).not.toMatch(/timestamp|generated|\d{4}-\d{2}-\d{2}T/);
     // Deterministic: a second run must produce a byte-identical file (git diffs).
@@ -228,7 +230,7 @@ describe("F1: baseline update", () => {
 
 describe("F1: readBaseline / writeBaseline", () => {
   it("treats a missing file as an empty baseline", () => {
-    expect(readBaseline(join(tmp(), "absent.json"))).toEqual(new Set());
+    expect(readBaseline(join(tmp(), "absent.json"))).toEqual(new Map());
   });
 
   it("rejects a corrupt baseline as an input error", () => {
@@ -239,17 +241,85 @@ describe("F1: readBaseline / writeBaseline", () => {
 
   it("rejects a baseline without a tests list", () => {
     const path = join(tmp(), "b.json");
-    writeFileSync(path, JSON.stringify({ schema_version: 1 }));
+    writeFileSync(path, JSON.stringify({ schema_version: 2 }));
     expect(() => readBaseline(path)).toThrow(/tests/);
   });
 
   it("round-trips ids and drops non-flaky entries", () => {
     const path = join(tmp(), "b.json");
     writeBaseline(path, [
-      { test_id: "b", lower_bound_score: 0.4 },
-      { test_id: "a", lower_bound_score: 0 },
+      { test_id: "b", gating_score: 0.4 },
+      { test_id: "a", gating_score: 0 },
     ]);
-    expect(readBaseline(path)).toEqual(new Set(["b"]));
+    expect(readBaseline(path)).toEqual(new Map([["b", 0.4]]));
+  });
+
+  it.each([
+    ["schema version", { schema_version: 1, tests: [] }, /schema_version.*2.*Regenerate/],
+    [
+      "duplicate id",
+      {
+        schema_version: 2,
+        tests: [
+          { test_id: "a", gating_score: 0.1 },
+          { test_id: "a", gating_score: 0.2 },
+        ],
+      },
+      /duplicated.*Regenerate/,
+    ],
+    ["string score", { schema_version: 2, tests: [{ test_id: "a", gating_score: "0.1" }] }, /finite number.*Regenerate/],
+    ["negative score", { schema_version: 2, tests: [{ test_id: "a", gating_score: -0.1 }] }, /between 0 and 1.*Regenerate/],
+    ["score above one", { schema_version: 2, tests: [{ test_id: "a", gating_score: 1.0001 }] }, /between 0 and 1.*Regenerate/],
+  ])("rejects a baseline with a bad %s", (_name, value, message) => {
+    const path = join(tmp(), "b.json");
+    writeFileSync(path, JSON.stringify(value));
+    expect(() => readBaseline(path)).toThrow(message);
+  });
+
+  it.each([
+    ["leading whitespace", "  attack-id"],
+    ["trailing whitespace", "attack-id  "],
+    ["newline workflow text", "attack-id\n::error title=pwn::injected"],
+    ["bidi format text", "attack-id\u202ehidden"],
+    ["zero-width format text", "attack-id\u200bhidden"],
+  ])("rejects a non-canonical %s on read without echoing it", (_name, test_id) => {
+    const path = join(tmp(), "b.json");
+    writeFileSync(path, JSON.stringify({ schema_version: 2, tests: [{ test_id, gating_score: 0.1 }] }));
+    let error: Error | undefined;
+    try {
+      readBaseline(path);
+    } catch (caught) {
+      error = caught as Error;
+    }
+    expect(error?.message).toContain("tests[0].test_id");
+    expect(error?.message).not.toContain(test_id);
+  });
+
+  it.each([
+    ["leading whitespace", "  attack-id"],
+    ["trailing whitespace", "attack-id  "],
+    ["newline workflow text", "attack-id\n::error title=pwn::injected"],
+    ["bidi format text", "attack-id\u202ehidden"],
+    ["zero-width format text", "attack-id\u200bhidden"],
+  ])("rejects a non-canonical %s on write", (_name, test_id) => {
+    expect(() => writeBaseline(join(tmp(), "b.json"), [{ test_id, gating_score: 0.1 }])).toThrow(
+      /tests\[0\]\.test_id.*Regenerate/,
+    );
+  });
+
+  it("rejects semantically duplicate ids before they can be normalized", () => {
+    const path = join(tmp(), "b.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schema_version: 2,
+        tests: [
+          { test_id: "same", gating_score: 0.1 },
+          { test_id: "same\u200b", gating_score: 0.2 },
+        ],
+      }),
+    );
+    expect(() => readBaseline(path)).toThrow(/tests\[1\]\.test_id.*Regenerate/);
   });
 });
 
@@ -271,7 +341,7 @@ describe("F1: ci --baseline gating", () => {
   it("exits 1 for a test that is not in the baseline", () => {
     const dir = tmp();
     const path = join(dir, "baseline.json");
-    writeFileSync(path, JSON.stringify({ schema_version: 1, tests: [] }));
+    writeFileSync(path, JSON.stringify({ schema_version: 2, tests: [] }));
     const out = runCli(["ci", suite, "--commit", "v1", "--fail-above", "0.01", "--baseline", path]);
     expect(out.status).toBe(1);
     expect(out.stderr).toContain("above --fail-above");
@@ -292,6 +362,46 @@ describe("F1: ci --baseline gating", () => {
     expect(out.stderr).not.toMatch(/error:/);
   });
 
+  it("uses the baseline score as a ceiling: equality and decrease pass", () => {
+    const dir = tmp();
+    const path = join(dir, "baseline.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schema_version: 2,
+        tests: [
+          { test_id: PROMO, gating_score: 0.6 },
+          { test_id: INVENTORY, gating_score: 0.1667 },
+        ],
+      }),
+    );
+    const out = runCli(["ci", suite, "--commit", "v1", "--fail-above", "0.1", "--baseline", path]);
+    expect(out.status).toBe(0);
+    expect(out.stderr).not.toContain("above --fail-above");
+  });
+
+  it("fails when a current gating score rises by 0.0001 above its ceiling", () => {
+    const dir = tmp();
+    const path = join(dir, "baseline.json");
+    writeFileSync(
+      path,
+      JSON.stringify({ schema_version: 2, tests: [{ test_id: PROMO, gating_score: 0.4999 }] }),
+    );
+    const out = runCli(["ci", suite, "--commit", "v1", "--fail-above", "0.1", "--baseline", path]);
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain("above --fail-above");
+    expect(out.stderr).toContain(PROMO);
+  });
+
+  it("fails when a breaching test id is missing from the baseline", () => {
+    const dir = tmp();
+    const path = join(dir, "baseline.json");
+    writeFileSync(path, JSON.stringify({ schema_version: 2, tests: [{ test_id: PROMO, gating_score: 0.5 }] }));
+    const out = runCli(["ci", suite, "--commit", "v1", "--fail-above", "0.1", "--baseline", path]);
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain(INVENTORY);
+  });
+
   it("adds baselined_breaches to --json without bumping schema_version", () => {
     const path = baselineAll(tmp());
     const out = runCli([
@@ -308,11 +418,11 @@ describe("F1: ci --baseline gating", () => {
     expect(out.status).toBe(0);
     const report = JSON.parse(out.stdout) as {
       schema_version: number;
-      baselined_breaches: { test_id: string; lower_bound_score: number }[];
+      baselined_breaches: { test_id: string; gating_score: number }[];
     };
-    expect(report.schema_version).toBe(1);
+    expect(report.schema_version).toBe(2);
     expect(report.baselined_breaches.length).toBeGreaterThan(0);
-    expect(report.baselined_breaches[0]!.lower_bound_score).toBeGreaterThan(0.01);
+    expect(report.baselined_breaches[0]!.gating_score).toBeGreaterThan(0.01);
   });
 
   it("omits baselined_breaches entirely when no --baseline is given", () => {
@@ -338,11 +448,18 @@ describe("F1: baseline-aware rendering", () => {
     ]),
     { metric: "flipRate", model: "weighted", lam: 0.1, minReruns: 2 },
   );
-  const baseline = new Set(["known"]);
+  const baseline = new Map([["known", 1]]);
+
+  it("accepts a gating score equal to or below its baseline ceiling", () => {
+    const ceiling = new Map([["known", 0.5]]);
+    expect(isWithinBaseline({ test_id: "known", gating_score: 0.4999 }, ceiling)).toBe(true);
+    expect(isWithinBaseline({ test_id: "known", gating_score: 0.5 }, ceiling)).toBe(true);
+    expect(isWithinBaseline({ test_id: "known", gating_score: 0.5001 }, ceiling)).toBe(false);
+  });
 
   it("labels newly flaky and baselined rows separately in human output", () => {
     const text = renderHuman(report, 10, 1, baseline);
-    expect(text).toContain("1 newly flaky, 1 baselined (known flaky).");
+    expect(text).toContain("1 newly flaky, 0 baseline regressions, 1 baselined (known flaky).");
     // M11: `/known\b/` alone was already satisfied by the "1 baselined (known
     // flaky)." header line, so the baselined row could vanish and this still passed.
     expect(text).toMatch(/^ {4}known$/m);
@@ -363,10 +480,22 @@ describe("F1: baseline-aware rendering", () => {
     expect(annotations.find((a) => a.startsWith("::notice"))).toContain("(baselined)");
     expect(markdown).toContain("| status |");
     expect(markdown).toContain("baselined |");
-    expect(markdown).toContain("1 newly flaky, 1 baselined (known flaky).");
+    expect(markdown).toContain("1 newly flaky, 0 baseline regressions, 1 baselined (known flaky).");
   });
 
-  it("keeps the v1 github output shape without a baseline", () => {
+  it("counts a known test above its ceiling as a regression, not as new", () => {
+    const regressed = new Map([["known", 0.2]]);
+    const human = renderHuman(report, 10, 1, regressed);
+    const markdown = renderMarkdown(report, 10, regressed);
+    const github = renderGithub(report, regressed).markdown;
+
+    expect(human).toContain("1 newly flaky, 1 baseline regression, 0 baselined (known flaky).");
+    expect(markdown).toContain("| newly flaky | 1 |");
+    expect(markdown).toContain("| baseline regressions | 1 |");
+    expect(github).toContain("1 newly flaky, 1 baseline regression, 0 baselined (known flaky).");
+  });
+
+  it("keeps the report github output shape without a baseline", () => {
     const { annotations, markdown } = renderGithub(report);
     expect(annotations.every((a) => a.startsWith("::warning"))).toBe(true);
     expect(markdown).not.toContain("| status |");
@@ -402,6 +531,54 @@ describe("F3: history merge", () => {
     const expected = [true, false];
     expect(mergeHistories([first, second]).runs.map((r) => r.result)).toEqual(expected);
     expect(mergeHistories([first, second, second]).runs.map((r) => r.result)).toEqual(expected);
+  });
+
+  it("matches old rows once while preserving distinct execution ids", () => {
+    const dir = tmp();
+    const legacy = run({ test_id: "a", timestamp: 1 });
+    const taggedA = { ...legacy, attempt: 0, execution_id: "run-a" };
+    const taggedB = { ...legacy, attempt: 0, execution_id: "run-b" };
+    const oldShard = writeShard(dir, "old.jsonl", [legacy]);
+    const newShard = writeShard(dir, "new.jsonl", [taggedA, taggedB]);
+    const mixedShard = writeShard(dir, "mixed.jsonl", [legacy, taggedB]);
+
+    for (const files of [
+      [oldShard, newShard],
+      [newShard, oldShard],
+      [newShard, mixedShard],
+      [mixedShard, newShard],
+    ]) {
+      expect(new Set(mergeHistories(files).runs.map((value) => value.execution_id))).toEqual(
+        new Set(["run-a", "run-b"]),
+      );
+    }
+
+    const onlyA = writeShard(dir, "a.jsonl", [taggedA]);
+    const onlyB = writeShard(dir, "b.jsonl", [taggedB]);
+    for (const files of [
+      [oldShard, onlyA, onlyB],
+      [onlyA, oldShard, onlyB],
+      [onlyA, onlyB, oldShard],
+    ]) {
+      expect(new Set(mergeHistories(files).runs.map((value) => value.execution_id))).toEqual(
+        new Set(["run-a", "run-b"]),
+      );
+    }
+
+    const taggedC = { ...legacy, attempt: 0, execution_id: "run-c" };
+    const cShard = writeShard(dir, "c.jsonl", [taggedC]);
+    expect(
+      new Set(mergeHistories([mixedShard, writeShard(dir, "other.jsonl", [legacy, taggedA]), cShard]).runs.map(
+        (value) => value.execution_id,
+      )),
+    ).toEqual(new Set(["run-a", "run-b", "run-c"]));
+
+    const legacyWithMetadata: RunRecord & { custom: string } = { ...legacy, custom: "kept" };
+    const metadataShard = writeShard(dir, "metadata.jsonl", [legacyWithMetadata]);
+    const [upgraded] = mergeHistories([metadataShard, onlyA]).runs;
+    // SAFETY: this test wrote the custom field above and checks that merge preserved it.
+    expect((upgraded as RunRecord & { custom: string }).custom).toBe("kept");
+    expect(upgraded!.execution_id).toBe("run-a");
   });
 
   it("orders the merged history by timestamp, ties by input order", () => {
@@ -578,7 +755,7 @@ describe("hostile test names", () => {
   });
 
   it("escapes the recovered list the same way", () => {
-    const body = renderMarkdown(reportFor("plain"), 10, new Set(["gone | away"]));
+    const body = renderMarkdown(reportFor("plain"), 10, new Map([["gone | away", 0.5]]));
     expect(body).toContain("Recovered: `gone \\| away`");
   });
 });

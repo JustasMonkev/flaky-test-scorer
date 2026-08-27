@@ -10,12 +10,16 @@ import {
   expandInputs,
   loadFile,
   loadRuns,
+  mergeHistories,
   normalizeResult,
+  parsePlaywrightReport,
   parseCsv,
   parseJUnit,
   readHistory,
   runsFromRows,
+  writeHistory,
 } from "../src/ingest.js";
+import { countIndependentRuns, groupByTestAndVersion } from "../src/score.js";
 
 const fixtures = fileURLToPath(new URL("./fixtures/", import.meta.url));
 const tmp = () => mkdtempSync(join(tmpdir(), "fts-"));
@@ -222,6 +226,115 @@ describe("JSON ingestion", () => {
   });
 });
 
+describe("Playwright status ingestion", () => {
+  it("drops interrupted results but keeps failed, timedOut, and crashed results", () => {
+    const runs = parsePlaywrightReport(
+      {
+        suites: [
+          {
+            file: "example.spec.ts",
+            specs: [
+              {
+                title: "handles status",
+                tests: [
+                  {
+                    projectName: "chromium",
+                    results: [
+                      { status: "interrupted" },
+                      { status: "failed" },
+                      { status: "timedOut" },
+                      { status: "crashed" },
+                      { status: "passed" },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      "inline.json",
+      null,
+    );
+
+    expect(runs.map((r) => r.result)).toEqual([false, false, false, true]);
+  });
+
+  it("keeps two retrying test objects as two executions when their times interleave", () => {
+    const retrying = (offset: number) => ({
+      projectName: "chromium",
+      results: [
+        { retry: 0, status: "failed", startTime: `2024-01-01T00:00:0${offset}.000Z` },
+        { retry: 1, status: "passed", startTime: `2024-01-01T00:00:0${offset + 2}.000Z` },
+      ],
+    });
+    const runs = parsePlaywrightReport({
+      suites: [{
+        file: "parallel.spec.ts",
+        specs: [{ title: "repeats", tests: [retrying(1), retrying(2)] }],
+      }],
+    }, "report.json", "v1");
+    const versions = groupByTestAndVersion(runs).values().next().value!;
+
+    expect(new Set(runs.map((run) => run.execution_id)).size).toBe(2);
+    expect(countIndependentRuns(versions.get("v1")!)).toBe(2);
+  });
+
+  it("separates changed Playwright chains loaded under the same report path", () => {
+    const report = (secondTime: string) => ({
+      suites: [{
+        file: "parallel.spec.ts",
+        specs: [{
+          id: "same-playwright-id",
+          title: "repeats",
+          tests: [{
+            projectName: "chromium",
+            results: [
+              { retry: 0, status: "failed", startTime: "2024-01-01T00:00:00.000Z" },
+              { retry: 1, status: "passed", startTime: secondTime },
+            ],
+          }],
+        }],
+      }],
+    });
+    const runs = [
+      ...parsePlaywrightReport(report("2024-01-01T00:00:02.000Z"), "report.json", "v1"),
+      ...parsePlaywrightReport(report("2024-01-01T00:00:01.000Z"), "report.json", "v1"),
+    ];
+    const versions = groupByTestAndVersion(runs).values().next().value!;
+
+    expect(new Set(runs.map((run) => run.execution_id)).size).toBe(2);
+    expect(countIndependentRuns(versions.get("v1")!)).toBe(2);
+  });
+
+  it("separates Playwright chains with matching times but different outcomes", () => {
+    const report = (secondStatus: string) => ({
+      suites: [{
+        file: "parallel.spec.ts",
+        specs: [{
+          id: "same-playwright-id",
+          title: "repeats",
+          tests: [{
+            projectName: "chromium",
+            results: [
+              { retry: 0, status: "failed", startTime: "2024-01-01T00:00:00.000Z" },
+              { retry: 1, status: secondStatus, startTime: "2024-01-01T00:00:01.000Z" },
+            ],
+          }],
+        }],
+      }],
+    });
+    const runs = [
+      ...parsePlaywrightReport(report("passed"), "report.json", "v1"),
+      ...parsePlaywrightReport(report("failed"), "report.json", "v1"),
+    ];
+    const versions = groupByTestAndVersion(runs).values().next().value!;
+
+    expect(new Set(runs.map((run) => run.execution_id)).size).toBe(2);
+    expect(countIndependentRuns(versions.get("v1")!)).toBe(2);
+  });
+});
+
 describe("input expansion", () => {
   it("expands a directory into its test artifacts", () => {
     const files = expandInputs([join(fixtures, "suite")]);
@@ -270,6 +383,44 @@ describe("history JSONL", () => {
     const { runs, corruptLines } = readHistory(file);
     expect(runs.map((r) => r.result)).toEqual([true, false]);
     expect(corruptLines).toBe(2); // the broken line and the one missing test_id
+  });
+
+  it("keeps valid execution ids and drops malformed ones", () => {
+    const runs = runsFromRows([
+      { test_id: "a", result: "pass", execution_id: "run-1" },
+      { test_id: "b", result: "pass", execution_id: "bad id" },
+      { test_id: "c", result: "pass", execution_id: { nested: true } },
+    ], null, null);
+    expect(runs.map((run) => run.execution_id)).toEqual(["run-1", undefined, undefined]);
+  });
+
+  it("keeps __proto__ as data instead of inheriting hidden execution fields", () => {
+    const file = join(tmp(), "history.jsonl");
+    writeFileSync(
+      file,
+      [
+        '{"test_id":"proto","result":"fail","__proto__":{"execution_id":"chain","attempt":0}}',
+        '{"test_id":"proto","result":"pass","__proto__":{"execution_id":"chain","attempt":1}}',
+      ].join("\n"),
+    );
+    const { runs } = readHistory(file);
+
+    expect(runs.every((run) => Object.getPrototypeOf(run) === Object.prototype)).toBe(true);
+    expect(runs.every((run) => !Object.hasOwn(run, "execution_id") && !Object.hasOwn(run, "attempt"))).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(runs[0], "__proto__")?.value).toEqual({
+      execution_id: "chain",
+      attempt: 0,
+    });
+    expect(countIndependentRuns(groupByTestAndVersion(runs).get("proto")!.get("__all__")!)).toBe(2);
+
+    const rewritten = join(tmp(), "rewritten.jsonl");
+    writeHistory(rewritten, runs);
+    const merged = mergeHistories([file, rewritten]).runs;
+    expect(merged).toHaveLength(2);
+    expect(Object.getOwnPropertyDescriptor(merged[0], "__proto__")?.value).toEqual({
+      execution_id: "chain",
+      attempt: 0,
+    });
   });
 
   // Regression: .jsonl went down the JSON.parse path, so a history file sitting in a
@@ -419,6 +570,37 @@ describe("history JSONL", () => {
       source_file: "junit.xml",
     };
     expect(dedupAgainst([], [run, run])).toHaveLength(2);
+  });
+
+  it("keeps distinct executions with otherwise identical history fields", () => {
+    const first = {
+      test_id: "A > t",
+      result: true,
+      version: "SAME",
+      timestamp: "2024-01-01T00:00:00.000Z",
+      duration_s: null,
+      failure_message: null,
+      source_file: "report.json",
+      attempt: 0,
+      execution_id: "run-a",
+    };
+    const second = { ...first, execution_id: "run-b" };
+    const legacy = {
+      test_id: first.test_id,
+      result: first.result,
+      version: first.version,
+      timestamp: first.timestamp,
+      duration_s: first.duration_s,
+      failure_message: first.failure_message,
+      source_file: first.source_file,
+    };
+    const nextAttempt = { ...first, attempt: 1 };
+
+    expect(dedupAgainst([first], [second])).toEqual([second]);
+    expect(dedupAgainst([first], [nextAttempt])).toEqual([nextAttempt]);
+    expect(dedupAgainst([first], [first])).toEqual([]);
+    expect(dedupAgainst([legacy], [first])).toEqual([]);
+    expect(dedupAgainst([first], [legacy])).toEqual([]);
   });
 
   it("normalizes invalid optional fields in history before deduplication", () => {

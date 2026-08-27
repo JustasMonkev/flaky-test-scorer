@@ -137,3 +137,40 @@ describe("duration variance edge cases", () => {
     expect(buildEvidence("a", grouped.get("a")!, durations).evidence.duration_variance).toBe(null);
   });
 });
+
+describe("retry evidence uses independent execution boundaries", () => {
+  const evidenceFor = (runs: RunRecord[]) => {
+    const grouped = groupByTestAndVersion(runs);
+    return buildEvidence(runs[0]!.test_id, grouped.get(runs[0]!.test_id)!, durationStats(grouped))
+      .evidence;
+  };
+
+  it("does not join a skipped attempt index", () => {
+    const evidence = evidenceFor([
+      run({ test_id: "gap", result: false, attempt: 0, timestamp: 1 }),
+      run({ test_id: "gap", result: true, attempt: 2, timestamp: 2 }),
+    ]);
+    expect(evidence.within_run_retries).toBe(0);
+  });
+
+  it("counts each duplicate-attempt boundary as its own mixed retry group", () => {
+    const evidence = evidenceFor([
+      run({ test_id: "duplicate", result: false, attempt: 0, timestamp: 1 }),
+      run({ test_id: "duplicate", result: true, attempt: 1, timestamp: 2 }),
+      run({ test_id: "duplicate", result: false, attempt: 1, timestamp: 3 }),
+      run({ test_id: "duplicate", result: true, attempt: 2, timestamp: 4 }),
+    ]);
+    expect(evidence.within_run_retries).toBe(2);
+  });
+
+  it("counts interleaved retry chains by execution id", () => {
+    const evidence = evidenceFor([
+      run({ test_id: "parallel", result: false, execution_id: "a", attempt: 0, timestamp: 1 }),
+      run({ test_id: "parallel", result: false, execution_id: "b", attempt: 0, timestamp: 2 }),
+      run({ test_id: "parallel", result: true, execution_id: "a", attempt: 1, timestamp: 3 }),
+      run({ test_id: "parallel", result: true, execution_id: "b", attempt: 1, timestamp: 4 }),
+    ]);
+    expect(evidence.within_run_retries).toBe(2);
+    expect(evidence.transitions.flips).toBe(3);
+  });
+});

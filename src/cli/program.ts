@@ -97,7 +97,7 @@ function buildProgram(setCode: (code: number) => void): Command {
     });
 
   // Configured after the subcommands exist so only the top-level help is replaced
-  // by the v1 usage text; `analyze --help` keeps Commander's generated help.
+  // by the custom usage text; `analyze --help` keeps Commander's generated help.
   program.configureHelp({ formatHelp: () => `${USAGE}\n` });
   return program;
 }

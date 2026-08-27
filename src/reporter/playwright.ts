@@ -8,6 +8,7 @@
  *   // playwright.config.ts
  *   reporter: [["flaky-test-scorer/reporter/playwright", { history: ".flaky-history.jsonl" }]]
  */
+import { createHash } from "node:crypto";
 import { relative } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { appendHistory, detectCommit, joinTestId, readHistory } from "../ingest.js";
@@ -29,6 +30,8 @@ interface SuiteLike {
 }
 
 interface TestCaseLike {
+  id?: string;
+  repeatEachIndex?: number;
   title: string;
   parent?: SuiteLike | undefined;
   location?: { file?: string } | undefined;
@@ -77,8 +80,7 @@ export default class FlakyHistoryReporter {
   private readonly historyPath: string;
   private readonly commit: string | undefined;
   private rootDir = process.cwd();
-  /** `attempt` is always recorded here; onEnd drops it again for un-retried tests. */
-  private pending: (RunRecord & { attempt: number })[] = [];
+  private pending: (RunRecord & { attempt: number; case_id: string })[] = [];
 
   constructor(options: FlakyReporterOptions = {}) {
     this.historyPath = options.history ?? ".flaky-history.jsonl";
@@ -97,6 +99,7 @@ export default class FlakyHistoryReporter {
     const startTime =
       result.startTime instanceof Date ? result.startTime.toISOString() : (result.startTime ?? null);
     const file = test.location?.file ? posixRel(this.rootDir, test.location.file) : null;
+    const caseId = test.id ?? `${playwrightTestId(test, this.rootDir)}:${test.repeatEachIndex ?? 0}`;
 
     this.pending.push({
       test_id: playwrightTestId(test, this.rootDir),
@@ -110,22 +113,33 @@ export default class FlakyHistoryReporter {
         : null,
       source_file: file,
       attempt: typeof result.retry === "number" ? result.retry : 0,
+      case_id: caseId,
     });
   }
 
   onEnd(): void {
     if (this.pending.length === 0) return;
     const version = this.commit ?? detectCommit();
-    // `attempt` is what makes within_run_retries visible (SPEC-V3 F2/F5) — without
-    // it a retry that flipped fail->pass is indistinguishable from two ordinary
-    // runs. Dropped again for tests that never retried, so their history lines
-    // keep the v1 record shape.
-    const retried = new Set(
-      this.pending.filter((run) => (run.attempt ?? 0) > 0).map((run) => run.test_id),
+    const chains = new Map<string, typeof this.pending>();
+    for (const run of this.pending) {
+      const chain = chains.get(run.case_id);
+      if (chain) chain.push(run);
+      else chains.set(run.case_id, [run]);
+    }
+    const ids = new Map(
+      [...chains].map(([caseId, chain]) => [
+        caseId,
+        `pw:${createHash("sha256")
+          .update(JSON.stringify([caseId, chain.map((run) => [run.attempt, run.timestamp, run.result])]))
+          .digest("hex")
+          .slice(0, 32)}`,
+      ]),
     );
-    const runs = this.pending.map(({ attempt, ...run }) =>
-      retried.has(run.test_id) ? { ...run, version, attempt } : { ...run, version },
-    );
+    const runs = this.pending.map(({ case_id, ...run }) => ({
+      ...run,
+      version,
+      execution_id: ids.get(case_id)!,
+    }));
     this.pending = []; // a second onEnd must not re-append (Playwright merges reports)
     appendHistory(this.historyPath, readHistory(this.historyPath).runs, runs);
   }

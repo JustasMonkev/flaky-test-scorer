@@ -19,19 +19,19 @@ Options:
   --metric <name>      flipRate | entropy            (default: flipRate)
   --model <name>       weighted | unweighted         (default: weighted)
   --lam <n>            EWMA decay in (0, 1]          (default: 0.1)
-  --min-reruns <n>     below this run count a test is low-data (default: 2)
+  --min-reruns <n>     some version needs n independent runs (default: 2)
   --top <n>            tests shown in human output   (default: 10)
   --explain            add an AI explanation section (optional, never affects exit code)
   --provider <name>    claude | codex | auto         (default: auto = first available)
   --explain-top <n>    flagged tests sent to the provider (default: 3)
-  --fail-above <n>     [ci] exit 1 if any lower_bound_score exceeds n
+  --fail-above <n>     [ci] exit 1 if any gating_score exceeds n
   --format <name>      markdown = sticky PR-comment body (excludes --json)
                        github = [ci] ::warning annotations + $GITHUB_STEP_SUMMARY
-  --baseline <file>    [ci] only NEW flakiness fails; known-flaky tests are reported
+  --baseline <file>    [ci] only new or above-ceiling flakiness fails; equal/lower passes
   -h, --help           show this help
 
 Baseline:
-  baseline update <inputs...>  record today's flaky tests (default .flaky-baseline.json)
+  baseline update <inputs...>  record today's gating ceilings (default .flaky-baseline.json)
 
 History:
   history merge <jsonl...> --history <out>       fold sharded CI histories into one file

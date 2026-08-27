@@ -267,8 +267,8 @@ describe("M9: the top-N budget goes to newly-flaky tests first", () => {
     writeFileSync(
       path,
       JSON.stringify({
-        schema_version: 1,
-        tests: [{ test_id: "checkout > applies promo code", lower_bound_score: 0.5 }],
+        schema_version: 2,
+        tests: [{ test_id: "checkout > applies promo code", gating_score: 0.5 }],
       }),
       "utf8",
     );

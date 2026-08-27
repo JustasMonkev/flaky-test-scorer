@@ -1,7 +1,7 @@
 import { buildEvidence, durationStats, recommendationFor, type Evidence, type LikelyCause } from "./evidence.js";
 import { scoreTests, type Metric, type Model, type RunRecord, type ScoredTest } from "./score.js";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export interface ReportTest extends ScoredTest {
   evidence: Evidence;
@@ -21,6 +21,16 @@ export interface BuildOptions {
   model: Model;
   lam: number;
   minReruns: number;
+}
+
+export type Baseline = ReadonlyMap<string, number>;
+
+/** A baseline is a ceiling: equal or lower current scores are accepted. */
+export function isWithinBaseline(
+  test: Pick<ReportTest, "test_id" | "gating_score">,
+  baseline: Baseline,
+): boolean {
+  return baseline.has(test.test_id) && test.gating_score <= baseline.get(test.test_id)!;
 }
 
 export function buildReport(
@@ -55,11 +65,14 @@ const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" 
 const flakinessLine = (s: Report["summary"]): string =>
   `${plural(s.flaky, "test")} show${s.flaky === 1 ? "s" : ""} flakiness (${s.very_flaky} very flaky), ${plural(s.low_data, "test")} need${s.low_data === 1 ? "s" : ""} more data.`;
 
-const newVsKnown = (flakyCount: number, known: number): string =>
-  `${flakyCount - known} newly flaky, ${known} baselined (known flaky).`;
+function baselineCounts(flaky: ReportTest[], baseline: Baseline) {
+  const baselined = flaky.filter((t) => isWithinBaseline(t, baseline)).length;
+  const regressions = flaky.filter((t) => baseline.has(t.test_id) && !isWithinBaseline(t, baseline)).length;
+  return { newly: flaky.length - baselined - regressions, regressions, baselined };
+}
 
-const knownCount = (flaky: ReportTest[], baseline: ReadonlySet<string>): number =>
-  flaky.filter((t) => baseline.has(t.test_id)).length;
+const baselineLine = ({ newly, regressions, baselined }: ReturnType<typeof baselineCounts>): string =>
+  `${newly} newly flaky, ${plural(regressions, "baseline regression")}, ${baselined} baselined (known flaky).`;
 
 /**
  * The flaky tests in display order: newly-flaky first, baselined after, stable
@@ -70,11 +83,14 @@ const knownCount = (flaky: ReportTest[], baseline: ReadonlySet<string>): number 
  */
 export function flakyRanked(
   report: Report,
-  baseline: ReadonlySet<string> | null = null,
+  baseline: Baseline | null = null,
 ): ReportTest[] {
   const flaky = report.tests.filter((t) => t.score > 0);
   if (!baseline) return flaky;
-  return [...flaky.filter((t) => !baseline.has(t.test_id)), ...flaky.filter((t) => baseline.has(t.test_id))];
+  return [
+    ...flaky.filter((t) => !isWithinBaseline(t, baseline)),
+    ...flaky.filter((t) => isWithinBaseline(t, baseline)),
+  ];
 }
 
 function evidenceLines(test: ReportTest): string[] {
@@ -103,7 +119,7 @@ export function renderHuman(
   report: Report,
   top: number,
   fileCount: number,
-  baseline: ReadonlySet<string> | null = null,
+  baseline: Baseline | null = null,
 ): string {
   const { summary } = report;
   const out: string[] = [
@@ -113,7 +129,7 @@ export function renderHuman(
 
   const flaky = flakyRanked(report, baseline);
   if (baseline) {
-    out.push(newVsKnown(flaky.length, knownCount(flaky, baseline)));
+    out.push(baselineLine(baselineCounts(flaky, baseline)));
   }
   if (flaky.length === 0) {
     out.push("", "No flaky tests detected.");
@@ -125,7 +141,7 @@ export function renderHuman(
   for (const test of suspects) {
     out.push("");
     out.push(
-      `#${test.rank}  ${test.verdict}  score ${test.score.toFixed(3)}  conf ${test.confidence.toFixed(2)}  lower bound ${test.lower_bound_score.toFixed(3)}${test.low_data ? "  [LOW DATA]" : ""}${baseline ? (baseline.has(test.test_id) ? "  [BASELINED]" : "  [NEW]") : ""}`,
+      `#${test.rank}  ${test.verdict}  score ${test.score.toFixed(3)}  conf ${test.confidence.toFixed(2)}  gating score ${test.gating_score.toFixed(3)}${test.low_data ? "  [LOW DATA]" : ""}${baseline ? (isWithinBaseline(test, baseline) ? "  [BASELINED]" : baseline.has(test.test_id) ? "  [REGRESSION]" : "  [NEW]") : ""}`,
     );
     out.push(`    ${test.test_id}`);
     for (const line of evidenceLines(test)) out.push(`    - ${line}`);
@@ -160,25 +176,26 @@ function mdCode(text: string): string {
 export function renderMarkdown(
   report: Report,
   top: number,
-  baseline: ReadonlySet<string> | null = null,
+  baseline: Baseline | null = null,
 ): string {
   const flaky = flakyRanked(report, baseline);
   const flakyIds = new Set(flaky.map((t) => t.test_id));
-  const known = baseline ? knownCount(flaky, baseline) : 0;
+  const counts = baseline ? baselineCounts(flaky, baseline) : null;
   // Recovered = baselined ids the current run no longer flags. Sorted, since a
-  // Set's iteration order is insertion order and the comment must diff cleanly.
+  // Map's iteration order is insertion order and the comment must diff cleanly.
   //
   // ponytail: a baselined id ABSENT from the report (deleted, renamed, or simply
   // not run in this shard) also counts as recovered. Ceiling — sharded CI can show
   // phantom recoveries. Narrowing it to `present && score === 0` is a one-line
   // change but a semantics change: it contradicts two committed tests and the
   // README example, so it wants a SPEC decision rather than a drive-by fix.
-  const recovered = baseline ? [...baseline].filter((id) => !flakyIds.has(id)).sort() : [];
+  const recovered = baseline ? [...baseline.keys()].filter((id) => !flakyIds.has(id)).sort() : [];
 
   const summary: [string, number][] = baseline
     ? [
-        ["newly flaky", flaky.length - known],
-        ["baselined (known flaky)", known],
+        ["newly flaky", counts!.newly],
+        ["baseline regressions", counts!.regressions],
+        ["baselined (known flaky)", counts!.baselined],
         ["recovered since baseline", recovered.length],
       ]
     : [
@@ -206,11 +223,11 @@ export function renderMarkdown(
       "",
       "### Top offenders",
       "",
-      `| rank | test | score | lower bound | verdict | likely cause |${baseline ? " status |" : ""}`,
+      `| rank | test | score | gating score | verdict | likely cause |${baseline ? " status |" : ""}`,
       `| --- | --- | --- | --- | --- | --- |${baseline ? " --- |" : ""}`,
       ...suspects.map(
         (t) =>
-          `| ${t.rank} | ${mdCode(t.test_id)} | ${t.score.toFixed(3)} | ${t.lower_bound_score.toFixed(3)} | ${t.verdict} | ${t.likely_cause.category} |${baseline ? ` ${baseline.has(t.test_id) ? "baselined" : "new"} |` : ""}`,
+          `| ${t.rank} | ${mdCode(t.test_id)} | ${t.score.toFixed(3)} | ${t.gating_score.toFixed(3)} | ${t.verdict} | ${t.likely_cause.category} |${baseline ? ` ${isWithinBaseline(t, baseline) ? "baselined" : baseline.has(t.test_id) ? "regression" : "new"} |` : ""}`,
       ),
     );
   }
@@ -233,34 +250,34 @@ const ghEscape = (text: string): string => text.replace(/%/g, "%25");
 /** `::warning` annotations plus a markdown job summary for GitHub Actions. */
 export function renderGithub(
   report: Report,
-  baseline: ReadonlySet<string> | null = null,
+  baseline: Baseline | null = null,
 ): { annotations: string[]; markdown: string } {
   const flaky = flakyRanked(report, baseline);
   // Baselined tests annotate as ::notice, not ::warning: they are already known and
   // must not read as a new regression in the PR's file view.
   const annotations = flaky.map((t) => {
-    const known = baseline?.has(t.test_id) ?? false;
-    return `::${known ? "notice" : "warning"} title=Flaky test${known ? " (baselined)" : ""}::${ghEscape(t.test_id)} — ${t.verdict} (score ${t.score.toFixed(3)}, lower bound ${t.lower_bound_score.toFixed(3)}, likely ${t.likely_cause.category}). ${t.recommendation}`;
+    const known = baseline ? isWithinBaseline(t, baseline) : false;
+    return `::${known ? "notice" : "warning"} title=Flaky test${known ? " (baselined)" : ""}::${ghEscape(t.test_id)} — ${t.verdict} (score ${t.score.toFixed(3)}, gating score ${t.gating_score.toFixed(3)}, likely ${t.likely_cause.category}). ${t.recommendation}`;
   });
 
   const rows = flaky
     .slice(0, 10)
     .map(
       (t) =>
-        `| ${t.rank} | ${mdCode(t.test_id)} | ${t.score.toFixed(3)} | ${t.confidence.toFixed(2)} | ${t.lower_bound_score.toFixed(3)} | ${t.verdict} | ${t.likely_cause.category} |${baseline ? ` ${baseline.has(t.test_id) ? "baselined" : "new"} |` : ""}`,
+        `| ${t.rank} | ${mdCode(t.test_id)} | ${t.score.toFixed(3)} | ${t.confidence.toFixed(2)} | ${t.gating_score.toFixed(3)} | ${t.verdict} | ${t.likely_cause.category} |${baseline ? ` ${isWithinBaseline(t, baseline) ? "baselined" : baseline.has(t.test_id) ? "regression" : "new"} |` : ""}`,
     );
 
-  const known = baseline ? knownCount(flaky, baseline) : 0;
+  const counts = baseline ? baselineCounts(flaky, baseline) : null;
 
   const markdown = [
     "## Flaky test report",
     "",
     `Scored ${plural(report.summary.tests, "test")} over ${plural(report.summary.runs, "run")}. ${flakinessLine(report.summary)}`,
-    ...(baseline ? ["", newVsKnown(flaky.length, known)] : []),
+    ...(counts ? ["", baselineLine(counts)] : []),
     "",
     ...(rows.length
       ? [
-          `| rank | test | score | confidence | lower bound | verdict | likely cause |${baseline ? " status |" : ""}`,
+          `| rank | test | score | confidence | gating score | verdict | likely cause |${baseline ? " status |" : ""}`,
           `| --- | --- | --- | --- | --- | --- | --- |${baseline ? " --- |" : ""}`,
           ...rows,
         ]

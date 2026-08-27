@@ -200,10 +200,10 @@ describe("tools/list", () => {
 // -------------------------------------------------------------- analyze_history
 
 describe("analyze_history", () => {
-  it("returns the full v1 report for a history file", async () => {
+  it("returns the full schema 2 report for a history file", async () => {
     await withClient(async (client) => {
       const report = okJson<Report>(await call(client, "analyze_history", { history_path: history }));
-      expect(report.schema_version).toBe(1);
+      expect(report.schema_version).toBe(2);
       expect(report.summary.runs).toBe(8);
       expect(report.summary.tests).toBe(2);
       const top = report.tests[0]!;

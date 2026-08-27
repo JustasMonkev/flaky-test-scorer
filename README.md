@@ -11,7 +11,7 @@ npx flaky-test-scorer analyze "**/junit*.xml"
 Analyzed 12 runs across 3 tests from 4 files.
 2 tests show flakiness (1 very flaky), 0 tests need more data.
 
-#1  very_flaky  score 1.000  conf 0.50  lower bound 0.500
+#1  very_flaky  score 1.000  conf 0.50  gating score 0.500
     checkout > applies promo code
     - 3 outcome flips in 4 runs across 1 version
     - fails on unchanged commit in 1 version
@@ -32,7 +32,7 @@ extra section on top; without it the CLI behaves exactly as it always has.
 npm i -D flaky-test-scorer     # or just use npx
 ```
 
-Node >= 20. ESM. Also usable as a library — `scoreTests` takes runs already grouped
+Node >= 22.12.0. ESM. Also usable as a library — `scoreTests` takes runs already grouped
 by test and version, so pipe them through `groupByTestAndVersion` first:
 
 ```ts
@@ -58,17 +58,17 @@ flaky-test-scorer ci      <globs-or-paths...> [options]
 | `--commit <sha>` | `GITHUB_SHA` / `CI_COMMIT_SHA` / `GIT_COMMIT` / `git rev-parse HEAD` | version tag for ingested runs |
 | `--json` | off | print the full report object on stdout |
 | `--metric` | `flipRate` | `flipRate` or `entropy` |
-| `--model` | `weighted` | `weighted` (EWMA over versions) or `unweighted` (mean) |
+| `--model` | `weighted` | `weighted` (age × independent-run weight) or `unweighted` (independent-run-weighted mean) |
 | `--lam <0..1]` | `0.1` | EWMA decay; smaller = longer memory |
-| `--min-reruns <n>` | `2` | below this run count a test is marked `low_data` |
+| `--min-reruns <n>` | `2` | a test is `low_data` unless some version has `n` independent executions |
 | `--top <n>` | `10` | tests shown in human output |
 | `--explain` | off | add an AI explanation section — [optional](#ai-explanations-optional), never changes the exit code |
 | `--provider <name>` | first available | `claude` or `codex` |
 | `--explain-top <n>` | `3` | flagged tests sent to the provider |
-| `--fail-above <n>` | – | `ci` only: exit 1 if any `lower_bound_score` exceeds `n` |
+| `--fail-above <n>` | – | `ci` only: exit 1 if any `gating_score` exceeds `n` |
 | `--format markdown` | – | sticky PR-comment body on stdout ([PR comments](#pr-comments)); mutually exclusive with `--json` |
 | `--format github` | – | `ci` only: `::warning` annotations + `$GITHUB_STEP_SUMMARY` markdown |
-| `--baseline <file>` | – | `ci` only: only **new** flakiness fails the build ([baseline](#baseline-fail-only-on-new-flakiness)) |
+| `--baseline <file>` | – | `ci` only: only **new or above-ceiling** flakiness fails the build ([baseline](#baseline-fail-only-on-new-flakiness)) |
 
 ```
 flaky-test-scorer baseline update <globs-or-paths...> [--baseline <file>] [--history <file>]
@@ -86,8 +86,9 @@ flaky-test-scorer auth clear <claude|codex>
 **Exit codes:** `0` ok · `1` threshold exceeded · `2` usage or input error
 (the message names the offending file and the problem).
 
-`--fail-above` compares against `lower_bound_score` (`score × confidence`), not
-the raw score. That is deliberate: a test seen twice cannot fail your build.
+`--fail-above` compares against `gating_score` (`score × confidence`), not
+the raw score. With the default settings, one retry chain cannot fail your build:
+it is one independent execution and remains `low_data`.
 
 ## Inputs
 
@@ -104,7 +105,7 @@ the raw score. That is deliberate: a test seen twice cannot fail your build.
   Pass values: `pass passed p ok success true 1 green`.
   Fail values: `fail failed f error failure false 0 red`. Anything else is dropped.
 - **History JSONL** — one run per line:
-  `{"test_id","result","version","timestamp","duration_s","failure_message","source_file"}`.
+  `{"test_id","result","version","timestamp","duration_s","failure_message","source_file","attempt?","execution_id?"}`.
   Corrupt lines are counted and skipped with a stderr warning, never fatal. The
   file is append-only, so fields this version does not know about survive on disk.
 
@@ -114,12 +115,16 @@ Per test, runs are grouped by version and ordered chronologically.
 
 1. **Per-version metric** — `flipRate` (fraction of consecutive pairs that flip)
    or `entropy` (normalized Shannon entropy of pass/fail).
-2. **Aggregate across versions** — EWMA `weight = λ(1-λ)^age` (newest version
-   heaviest), or a plain mean.
-3. **`confidence`** = `(1 - 1/√runs) × (1 - √variance(per-version scores))`,
-   clamped to `[0,1]` — data volume times score stability.
-4. **`lower_bound_score`** = `max(0, score × confidence)` — the conservative
-   number to gate on.
+2. **Aggregate across versions** — multiply each version's independent-run count
+   by EWMA `λ(1-λ)^age`, or use independent-run count alone for `unweighted`.
+3. **`confidence`** = `(1 - 1/√independent_runs) × (1 - √variance(per-version scores))`,
+   clamped to `[0,1]` — data volume times score stability. Confidence volume uses
+   independent executions from scored versions only; singleton versions do not
+   increase it. New retry records carry `execution_id`, so parallel chains stay
+   separate. Old records without it keep the adjacent-attempt fallback.
+4. **`gating_score`** = `max(0, score × confidence)` — the conservative number
+   to gate on. Single-observation versions do not add score or confidence, and
+   `low_data` forces this value to `0`.
 5. **`verdict`**: `<=0 not_flaky`, `<0.17 slightly_flaky`, `<0.5 flaky`, else `very_flaky`.
 
 Ranking sorts by `(score, confidence, total_runs)` descending. These are
@@ -132,7 +137,8 @@ Kowalczyk et al., *"Modeling and Ranking Flaky Tests at Apple"* (ICSE-SEIP 2020)
 
 Every test carries deterministic evidence — facts, not guesses:
 
-- `transitions` — outcome flips and total runs
+- `transitions` — outcome flips and total observations
+- `independent_runs` — executions after collapsing retry attempts for confidence
 - `within_version_flips` — versions where the *same* commit both passed and
   failed; the strongest flakiness signal there is
 - `within_run_retries` — executions whose in-run retry attempts disagreed
@@ -147,7 +153,7 @@ Every test carries deterministic evidence — facts, not guesses:
 `resource`, `assertion`, `unknown`, each with a `low|medium|high` confidence from
 cluster dominance and a deterministic `recommendation` template.
 
-## Baseline: fail only on new flakiness
+## Baseline: fail only on new or worse flakiness
 
 Turning the gate on in a repo that already has flaky tests fails every build on
 day one. Record what is already broken, then gate only on regressions:
@@ -160,12 +166,14 @@ flaky-test-scorer ci "reports/**/*.xml" --history .flaky-history.jsonl \
   --fail-above 0.3 --baseline .flaky-baseline.json
 ```
 
-A test breaches only if `lower_bound_score > --fail-above` **and** its id is not
-in the baseline. Baselined breaches are still reported — on stderr, in the human
+A test breaches only if `gating_score > --fail-above` **and** its id is missing
+from the baseline or its current score is above its stored ceiling. Equality and
+decreases pass. Baselined breaches are still reported — on stderr, in the human
 and GitHub output (as `::notice`, not `::warning`), and in `--json` under
-`baselined_breaches`. A missing baseline file means "empty baseline", not an
-error. The file is sorted and timestamp-free, so its git diff is the list of
-tests you fixed or newly accepted.
+`baselined_breaches`. Confidence can grow as more independent runs arrive, so a
+test can rise above its stored ceiling by design. A missing baseline file means
+"empty baseline", not an error. The file is sorted and timestamp-free, so its
+git diff is the list of tests you fixed or newly accepted.
 
 ## Sharded CI
 
@@ -228,7 +236,8 @@ export default defineConfig({
 Each attempt becomes one run in retry order, so a test that only passed on retry
 shows up as `within_run_retries`. `test_id` is `file > project > describe > title`
 — the same id the Playwright JSON ingester produces, so the two sources merge
-into one history. Appends are deduped on run identity, so re-running the reporter
+into one history. A private `execution_id` keeps parallel and `repeatEach` retry
+chains separate. Appends are deduped on run identity, so re-running the reporter
 over an unchanged run adds nothing. The reporter imports nothing from
 `@playwright/test`, at type level or runtime.
 
@@ -301,7 +310,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # ...
-      - uses: your-org/flaky-test-scorer@v1
+      # Both npm flaky-test-scorer@2.0.0 and the Git tag v2 must be published first.
+      - uses: JustasMonkev/flaky-test-scorer@v2
         with:
           input: "junit*.xml"
           fail-above: "0.6"
@@ -325,7 +335,7 @@ npx flaky-test-scorer analyze "artifacts/**/*.xml" --history .flaky-history.json
 
 ```jsonc
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "summary": { "tests": 86, "runs": 1284, "flaky": 4, "very_flaky": 1, "low_data": 2 },
   "params": { "metric": "flipRate", "model": "weighted", "lam": 0.1, "min_reruns": 2 },
   "tests": [
@@ -334,9 +344,10 @@ npx flaky-test-scorer analyze "artifacts/**/*.xml" --history .flaky-history.json
       "test_id": "checkout > applies promo code",
       "score": 0.86,               // observed instability, 0..1
       "confidence": 0.9,           // data volume x stability, 0..1
-      "lower_bound_score": 0.774,  // score x confidence — gate on this
+      "gating_score": 0.774,       // score x confidence — gate on this
       "verdict": "very_flaky",
       "total_runs": 12,
+      "independent_runs": 12,
       "num_versions": 3,
       "low_data": false,
 "evidence": {
@@ -357,8 +368,10 @@ npx flaky-test-scorer analyze "artifacts/**/*.xml" --history .flaky-history.json
 
 Agent guidance:
 
-- Rank work by `lower_bound_score`, not `score`. Ignore rows with `low_data: true`
+- Rank work by `gating_score`, not `score`. Ignore rows with `low_data: true`
   until they have more runs — recommend reruns instead of a fix.
+- One retry chain is one independent execution, so it cannot pass the gate by
+  itself; `low_data` forces its `gating_score` to `0`.
 - `within_version_flips > 0` means the test failed on an unchanged commit. That
   is the evidence to quote when arguing a test is flaky rather than broken.
 - `likely_cause` is a keyword heuristic. Use it to pick where to look; confirm it
@@ -376,7 +389,7 @@ Claude or Codex and prints the prose answer in a clearly separated section.
 Everything else stays exactly the same:
 
 - the report, the scores and the JSON schema are unchanged (`ai_analysis` is an
-  additive field, `schema_version` stays `1`);
+  additive field, `schema_version` stays `2`);
 - **an explain failure never changes the exit code** — no key, a refusal, a rate
   limit or a dead provider warns on stderr and the deterministic report still
   prints, so `ci --fail-above` gates on numbers only;
@@ -448,7 +461,8 @@ Composite action (restores history from cache, scores, saves history):
 - uses: actions/checkout@v4
 - run: npm test -- --reporter=junit --outputFile=junit.xml
   continue-on-error: true
-- uses: your-org/flaky-test-scorer@v1
+# Both npm flaky-test-scorer@2.0.0 and the Git tag v2 must be published first.
+- uses: JustasMonkev/flaky-test-scorer@v2
   with:
     input: "junit*.xml"
     fail-above: "0.6"
@@ -469,7 +483,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
+        with: { node-version: 22 }
       - run: npm ci
       - run: npm test -- --reporter=junit --outputFile=junit.xml
         continue-on-error: true
@@ -496,7 +510,7 @@ to the job summary.
 ```yaml
 flaky-tests:
   stage: test
-  image: node:20
+  image: node:22
   cache:
     key: flaky-history-$CI_COMMIT_REF_SLUG
     paths: [.flaky-history.jsonl]
