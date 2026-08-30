@@ -1,12 +1,11 @@
-import { XMLParser, XMLValidator } from "fast-xml-parser";
+import { XMLParser } from "fast-xml-parser";
+import { SyntaxValidator } from "fast-xml-validator";
 import type { RunRecord } from "../score.js";
 import {
-  InputError,
   asArray,
   cleanTestId,
   normalizeResult,
   numberOrNull,
-  stripBom,
   type XmlNode,
 } from "./common.js";
 
@@ -43,17 +42,8 @@ function nodeText(node: unknown): string {
 }
 
 export function parseJUnit(xml: string, file: string, version: string | null): RunRecord[] {
-  const text = stripBom(xml);
-  const valid = XMLValidator.validate(text);
-  if (valid !== true) {
-    throw new InputError(
-      `malformed XML in ${file}: ${valid.err.msg} (line ${valid.err.line}). ` +
-        `Check that the file is a complete JUnit report — truncated uploads are the usual cause.`,
-    );
-  }
-
-  // SAFETY: XMLValidator accepted this document, so the parser returns an XML object root.
-  const root = xmlParser.parse(text) as XmlNode;
+  SyntaxValidator.validate(xml)
+  const root = xmlParser.parse(xml) as XmlNode;
   const suites: XmlNode[] = [];
   collectSuites(root, suites);
 

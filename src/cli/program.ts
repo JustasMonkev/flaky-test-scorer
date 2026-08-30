@@ -1,12 +1,10 @@
 import { Command, CommanderError } from "commander";
 import { InputError } from "../ingest.js";
 import { runReport } from "./analyze.js";
-import { readKeyFromStdin, runAuthStatus, writeConfig } from "./auth.js";
 import { runBaselineUpdate } from "./baseline.js";
 import { runHistoryMerge, runHistoryPrune } from "./history.js";
-import { loadAi } from "./lazy-ai.js";
-import { asProvider, type ReportOptions } from "./options.js";
 import { USAGE } from "./usage.js";
+import type {ReportOptions} from "./options.js";
 
 function buildProgram(setCode: (code: number) => void): Command {
   const program = new Command();
@@ -63,37 +61,6 @@ function buildProgram(setCode: (code: number) => void): Command {
     .option("--keep-runs-per-test <n>")
     .action((values: { history?: string; keepDays?: string; keepRunsPerTest?: string }) => {
       setCode(runHistoryPrune(values));
-    });
-
-  // Lazy import: the MCP SDK is only paid for when the server is actually run,
-  // and it keeps this file independent of src/mcp's build state.
-  program.command("mcp").action(async () => {
-    const { runMcpServer } = await import("../mcp/index.js");
-    await runMcpServer();
-    setCode(0);
-  });
-
-  const auth = program.command("auth");
-  auth.command("status").action(async () => setCode(await runAuthStatus()));
-  auth
-    .command("set-key")
-    .argument("<provider>")
-    .option("--key <k>", "the key; omit it and the key is read from stdin (keeps it out of shell history)")
-    .action(async (provider: string, values: { key?: string }) => {
-      const name = asProvider(provider, "provider");
-      const key = values.key ?? readKeyFromStdin();
-      const { setKey } = await loadAi();
-      writeConfig(() => setKey(name, key));
-      process.stdout.write(`stored ${provider} key\n`);
-    });
-  auth
-    .command("clear")
-    .argument("<provider>")
-    .action(async (provider: string) => {
-      const name = asProvider(provider, "provider");
-      const { clearKey } = await loadAi();
-      writeConfig(() => clearKey(name));
-      process.stdout.write(`cleared ${provider} key\n`);
     });
 
   // Configured after the subcommands exist so only the top-level help is replaced

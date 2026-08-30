@@ -1,10 +1,7 @@
-import type { ProviderName } from "../ai/index.js";
 import { InputError } from "../ingest.js";
 import { SCORE_DEFAULTS, type Metric, type Model } from "../score.js";
 
 export const DEFAULT_BASELINE = ".flaky-baseline.json";
-
-const PROVIDERS = ["claude", "codex"] as const;
 
 /** Finite-number option. Range checks belong at the call site — this one has none. */
 export function numberOption(raw: string | undefined, name: string, fallback: number): number {
@@ -12,24 +9,6 @@ export function numberOption(raw: string | undefined, name: string, fallback: nu
   const value = Number(raw);
   if (!Number.isFinite(value)) throw new InputError(`--${name} must be a number, got "${raw}"`);
   return value;
-}
-
-export function asProvider(raw: string, what: string): ProviderName {
-  const provider = PROVIDERS.find((candidate) => candidate === raw);
-  if (provider === undefined) {
-    throw new InputError(`${what} must be claude, codex or auto, got "${raw}"`);
-  }
-  return provider;
-}
-
-/**
- * `--provider auto` means "first available", the documented default. The MCP
- * `explain_test` tool already accepted `auto`; the CLI rejected it, so the two
- * agent-facing surfaces spoke different vocabularies for the same choice.
- */
-export function parseProvider(raw: string | undefined): ProviderName | undefined {
-  if (raw === undefined || raw === "auto") return undefined;
-  return asProvider(raw, "--provider");
 }
 
 export interface ReportOptions {
@@ -41,9 +20,6 @@ export interface ReportOptions {
   lam?: string;
   minReruns?: string;
   top?: string;
-  explain: boolean;
-  provider?: string;
-  explainTop?: string;
   failAbove?: string;
   format?: string;
   baseline?: string;

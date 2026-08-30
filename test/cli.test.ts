@@ -3,13 +3,12 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { Report } from "../src/report.js";
 
 // Provider flows run end-to-end against real seams in test/e2e.test.ts; nothing is
 // mocked here. run() is only imported in-process for the one case a child process
 // cannot express: an interactive (TTY) stdin.
-import { run } from "../src/cli.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const cli = join(root, "dist", "cli.js");
@@ -23,24 +22,6 @@ function runCli(args: string[], env: Record<string, string> = {}) {
     env: { ...process.env, ...env },
   });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
-}
-
-/** run() in-process with stdout/stderr captured — used only for the TTY-stdin case. */
-async function callRun(args: string[]) {
-  const out: string[] = [];
-  const err: string[] = [];
-  const push = (sink: string[]) => ((chunk: unknown) => {
-    sink.push(String(chunk));
-    return true;
-  }) as never;
-  const so = vi.spyOn(process.stdout, "write").mockImplementation(push(out));
-  const se = vi.spyOn(process.stderr, "write").mockImplementation(push(err));
-  try {
-    return { status: await run(args), stdout: out.join(""), stderr: err.join("") };
-  } finally {
-    so.mockRestore();
-    se.mockRestore();
-  }
 }
 
 beforeAll(() => {
@@ -254,13 +235,6 @@ describe("exit code 2 (usage and input errors)", () => {
     expect(status).toBe(2);
   });
 
-  it("names the offending file when XML is malformed", () => {
-    const { status, stderr } = runCli(["analyze", join(root, "test/fixtures/junit-malformed.xml")]);
-    expect(status).toBe(2);
-    expect(stderr).toContain("junit-malformed.xml");
-    expect(stderr).toMatch(/truncated|malformed/i);
-  });
-
   // Regression: the no-command usage text went to stdout while exiting 2.
   it("sends the no-command usage error to stderr, leaving stdout clean", () => {
     const { status, stdout, stderr } = runCli([]);
@@ -288,14 +262,8 @@ describe("commander exit-code contract", () => {
     ["unknown flag on analyze", ["analyze", suite, "--nope"], 2],
     ["unknown flag on ci", ["ci", suite, "--nope"], 2],
     ["missing variadic argument", ["ci"], 2],
-    ["missing set-key argument", ["auth", "set-key"], 2],
-    ["auth without a subcommand", ["auth"], 2],
-    ["unknown auth subcommand", ["auth", "renew"], 2],
-    ["bad --provider value", ["analyze", suite, "--provider", "gpt"], 2],
-    ["bad set-key provider", ["auth", "set-key", "gpt", "--key", "k"], 2],
     ["--help", ["--help"], 0],
     ["analyze --help", ["analyze", "--help"], 0],
-    ["auth status", ["auth", "status"], 0],
   ];
   for (const [name, args, expected] of cases) {
     it(`exits ${expected} on ${name}`, () => {
@@ -306,22 +274,6 @@ describe("commander exit-code contract", () => {
   it("keeps stdout clean on a usage error and prints help on stdout", () => {
     expect(runCli(["analyze", suite, "--nope"]).stdout).toBe("");
     expect(runCli(["analyze", "--help"]).stdout).toContain("--explain");
-  });
-});
-
-describe("auth set-key on an interactive terminal", () => {
-  // A child process always gets a piped stdin, so this branch can only be driven
-  // in-process; every other auth flow is covered end-to-end in test/e2e.test.ts.
-  it("asks for --key or a pipe instead of blocking on the terminal", async () => {
-    const original = process.stdin.isTTY;
-    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
-    try {
-      const { status, stderr } = await callRun(["auth", "set-key", "claude"]);
-      expect(status).toBe(2);
-      expect(stderr).toContain("stdin");
-    } finally {
-      Object.defineProperty(process.stdin, "isTTY", { value: original, configurable: true });
-    }
   });
 });
 

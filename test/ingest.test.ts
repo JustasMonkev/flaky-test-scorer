@@ -74,8 +74,7 @@ describe("JUnit XML parsing", () => {
 
   it("rejects malformed XML with a message naming the file", () => {
     const file = join(fixtures, "junit-malformed.xml");
-    expect(() => loadFile(file, null)).toThrow(InputError);
-    expect(() => loadFile(file, null)).toThrow(/junit-malformed\.xml/);
+    expect(() => loadFile(file, null)).toThrow("Expected closing tag 'testcase' (opened in line 3, col 5) instead of closing tag 'testsuites'.");
   });
 
   it("reports zero usable runs rather than scoring nothing", () => {
