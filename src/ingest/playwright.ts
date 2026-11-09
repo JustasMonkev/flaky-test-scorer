@@ -23,7 +23,7 @@ function playwrightError(result: XmlNode): string | null {
   return many.length > 0 ? many.join(" | ").slice(0, 2000) : null;
 }
 
-const executionId = (value: unknown): string =>
+export const playwrightExecutionId = (value: unknown): string =>
   `pw:${createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 32)}`;
 
 function walkPlaywrightSuite(
@@ -55,7 +55,7 @@ function walkPlaywrightSuite(
         result["parallelIndex"],
         outcome,
       ]);
-      const id = executionId([file, spec["id"] ?? "", ordinal, signature]);
+      const id = playwrightExecutionId([file, spec["id"] ?? "", ordinal, signature]);
 
       attempts.forEach(({ result, outcome }, i) => {
         const duration = numberOrNull(result["duration"]);
