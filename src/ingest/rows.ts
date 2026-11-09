@@ -51,14 +51,11 @@ const DURATION_KEYS = ["duration_s", "duration", "elapsed"];
 const MESSAGE_KEYS = ["failure_message", "message", "error"];
 const VERSION_KEYS = ["version"] as const;
 
-/**
- * Every key `runsFromRows` consumes. Anything else on a history line is a field
- * this version does not know about and must survive a merge/prune rewrite untouched.
- */
+// Preserve unrecognized fields when rewriting history.
 export const CONSUMED_ROW_KEYS: ReadonlySet<string> = new Set([
   ...TEST_ID_KEYS,
   ...RESULT_KEYS,
-  "version",
+  ...VERSION_KEYS,
   ...TIMESTAMP_KEYS,
   ...DURATION_KEYS,
   ...MESSAGE_KEYS,
@@ -89,7 +86,6 @@ function buildRun(
     failure_message: typeof failureMessage === "string" ? failureMessage : null,
     source_file: typeof sourceFile === "string" ? sourceFile : fallbackFile,
   };
-  // Kept only when present, so v1 history lines round-trip byte-identically.
   if (attempt !== null) run.attempt = attempt;
   if (executionId !== null) run.execution_id = executionId;
   return run;
@@ -118,14 +114,13 @@ export function runFromRow(
 
   const testId = firstValue(row, TEST_ID_KEYS);
   const resultRaw = firstValue(row, RESULT_KEYS);
-  if (testId === null || resultRaw === null) return null;
+  if (testId === null) return null;
   const result = normalizeResult(resultRaw);
   if (result === null) return null;
   const cleanId = cleanTestId(String(testId));
   return cleanId === "" ? null : buildRun(row, cleanId, result, fallbackFile, fallbackVersion);
 }
 
-/** Normalize alias-bearing row objects (from JSON or CSV) into runs. */
 export function runsFromRows(
   rows: unknown[],
   fallbackFile: string | null,
