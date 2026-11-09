@@ -10,9 +10,8 @@ import Reporter, { playwrightTestId } from "../src/reporter/playwright.js";
 const rootDir = "/repo";
 const historyIn = () => join(mkdtempSync(join(tmpdir(), "fts-rep-")), "history.jsonl");
 
-// Structural stand-ins for Playwright's TestCase / TestResult / Suite.
 function testCase(opts: { file: string; project?: string; describes?: string[]; title: string; id?: string; repeatEachIndex?: number }) {
-  let parent: any = { title: "", type: "root" };
+  let parent: Parameters<typeof playwrightTestId>[0]["parent"] = { title: "", type: "root" };
   parent = { title: opts.project ?? "", type: "project", parent };
   parent = { title: opts.file, type: "file", parent };
   for (const d of opts.describes ?? []) parent = { title: d, type: "describe", parent };
@@ -37,7 +36,7 @@ function result(opts: {
     retry: opts.retry ?? 0,
     duration: opts.duration ?? 100,
     startTime: opts.startTime ?? new Date("2024-01-01T00:00:00Z"),
-    ...(opts.error === undefined ? {} : { error: { message: opts.error } }),
+    error: opts.error === undefined ? undefined : { message: opts.error },
   };
 }
 
@@ -68,8 +67,7 @@ describe("test_id", () => {
   });
 
   it("falls back to the file suite title when location is absent", () => {
-    const test = testCase({ file: "tests/x.spec.ts", title: "t" }) as any;
-    delete test.location;
+    const test = { ...testCase({ file: "tests/x.spec.ts", title: "t" }), location: undefined };
     expect(playwrightTestId(test, rootDir)).toBe("tests/x.spec.ts > t");
   });
 });
