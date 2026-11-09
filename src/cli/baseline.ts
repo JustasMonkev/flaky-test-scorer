@@ -2,7 +2,7 @@ import { writeBaseline } from "../ingest.js";
 import { loadReport } from "./analyze.js";
 import { DEFAULT_BASELINE, parseScoreParams, type ReportOptions } from "./options.js";
 
-export async function runBaselineUpdate(inputs: string[], values: ReportOptions): Promise<number> {
+export function runBaselineUpdate(inputs: string[], values: ReportOptions): number {
   const params = parseScoreParams(values);
   const path = values.baseline ?? DEFAULT_BASELINE;
   const { report } = loadReport(inputs, values, params);

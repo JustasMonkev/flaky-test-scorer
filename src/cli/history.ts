@@ -15,12 +15,9 @@ import { numberOption, requireHistory } from "./options.js";
 export function runHistoryMerge(inputs: string[], values: { history?: string }): number {
   const out = requireHistory(values.history, "history merge");
   const files = expandInputs(inputs);
-  // The destination is an input, not just a target. `writeHistory` rewrites it
-  // wholesale, so merging a shard into an accumulated history (the actions/cache
-  // pattern) used to replace months of runs with one shard — and a merge that
-  // yielded nothing truncated the file to empty while exiting 0.
-  const existing = existsSync(out) && !files.includes(resolvePath(out)) ? [resolvePath(out)] : [];
-  const { runs, corruptLines, corruptFiles } = mergeHistories([...existing, ...files]);
+  const outputPath = resolvePath(out);
+  const mergeInputs = existsSync(out) && !files.includes(outputPath) ? [outputPath, ...files] : files;
+  const { runs, corruptLines, corruptFiles } = mergeHistories(mergeInputs);
   warnCorrupt(corruptLines, corruptFiles.join(", "));
   if (runs.length === 0) {
     throw new InputError(
@@ -30,7 +27,7 @@ export function runHistoryMerge(inputs: string[], values: { history?: string }):
   }
   writeHistory(out, runs);
   process.stdout.write(
-    `merged ${runs.length} run(s) from ${files.length + existing.length} file(s) into ${out}\n`,
+    `merged ${runs.length} run(s) from ${mergeInputs.length} file(s) into ${out}\n`,
   );
   return 0;
 }
@@ -59,9 +56,6 @@ export function runHistoryPrune(values: {
   const kept = pruneRuns(runs, options);
   writeHistory(path, kept);
   process.stdout.write(`pruned ${runs.length - kept.length} run(s); ${kept.length} remain in ${path}\n`);
-  // JUnit <testsuite> elements often carry no timestamp, and an undated run is
-  // never age-comparable, so it survives every --keep-days forever. Saying so
-  // beats "pruned 0 run(s)" with no explanation.
   if (options.keepDays !== undefined) {
     const undated = kept.filter((run) => timestampKey(run.timestamp)[0] !== 1).length;
     if (undated > 0) {

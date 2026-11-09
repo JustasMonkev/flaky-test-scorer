@@ -6,10 +6,6 @@ import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { Report } from "../src/report.js";
 
-// Provider flows run end-to-end against real seams in test/e2e.test.ts; nothing is
-// mocked here. run() is only imported in-process for the one case a child process
-// cannot express: an interactive (TTY) stdin.
-
 const root = fileURLToPath(new URL("..", import.meta.url));
 const cli = join(root, "dist", "cli.js");
 const suite = join(root, "test", "fixtures", "suite");
@@ -75,7 +71,7 @@ describe("analyze", () => {
     expect(human).toContain("#1  very_flaky  score 1.000");
     expect(human).toContain("fails on unchanged commit in 1 version");
     expect(human).toContain("likely cause: timeout");
-    expect(human).not.toContain("renders cart"); // not flaky, so not listed
+    expect(human).not.toContain("renders cart");
   });
 
   it("limits the human list with --top", () => {
@@ -84,8 +80,6 @@ describe("analyze", () => {
     expect(human).not.toContain("syncs inventory");
   });
 
-  // Regression: --top 0 claimed "No flaky tests detected." one line under
-  // "2 show flakiness", and --top -1 quietly dropped the last row.
   it("never contradicts the summary when --top hides the list", () => {
     const human = runCli(["analyze", suite, "--commit", "v1", "--top", "0"]).stdout;
     expect(human).toContain("2 tests show flakiness");
@@ -108,7 +102,6 @@ describe("history", () => {
     expect(second.summary.runs).toBe(6);
     expect(second.tests[0]!.test_id).toBe("checkout > applies promo code");
 
-    // Re-ingesting run-2 must not grow the history.
     const third = JSON.parse(
       runCli(["analyze", join(suite, "run-2.xml"), "--commit", "v1", "--history", history, "--json"]).stdout,
     ) as Report;
@@ -116,10 +109,6 @@ describe("history", () => {
     expect(readFileSync(history, "utf8").trim().split("\n")).toHaveLength(6);
   });
 
-  // Regression: dedup used to key on (test_id, version, timestamp, source_file) only.
-  // In the shipped action.yml flow — same commit, same artifact path, no suite
-  // timestamp — a rerun that flipped pass->fail was indistinguishable from a
-  // re-upload and got discarded, so within_version_flips could never fire.
   it("keeps a rerun that flipped outcome on the same commit and artifact path", () => {
     const dir = tmp();
     const history = join(dir, "history.jsonl");
@@ -139,7 +128,6 @@ describe("history", () => {
     expect(report.tests[0]!.evidence.within_version_flips).toBe(1);
     expect(report.tests[0]!.score).toBe(1);
 
-    // A third ingest of the identical failing artifact is still deduped.
     const again = JSON.parse(
       runCli(["analyze", artifact, "--commit", "SAME", "--history", history, "--json"]).stdout,
     ) as Report;
@@ -159,7 +147,6 @@ describe("ci", () => {
   });
 
   it("uses the gating score, not the raw score", () => {
-    // raw score is 1.0, gating score is 0.5 -> a 0.6 threshold must not fail.
     expect(runCli(["ci", suite, "--commit", "v1", "--fail-above", "0.6"]).status).toBe(0);
   });
 
@@ -175,8 +162,6 @@ describe("ci", () => {
     expect(summary).toContain("| 1 | `checkout > applies promo code` | 1.000 |");
   });
 
-  // Regression: an unwritable $GITHUB_STEP_SUMMARY threw out of the run and failed
-  // the whole step; the job summary is cosmetic, so it must only warn.
   it("warns instead of failing when $GITHUB_STEP_SUMMARY cannot be written", () => {
     const { status, stdout, stderr } = runCli(
       ["ci", suite, "--commit", "v1", "--format", "github"],
@@ -187,8 +172,6 @@ describe("ci", () => {
     expect(stderr).toContain("GITHUB_STEP_SUMMARY");
   });
 
-  // Regression: annotations used to go to stdout unconditionally, so combining the
-  // two documented ci flags left stdout as JSON followed by ::warning lines.
   it("keeps stdout parseable when --json and --format github are combined", () => {
     const summaryFile = join(tmp(), "summary.md");
     const { stdout, stderr } = runCli(
@@ -215,8 +198,6 @@ describe("exit code 2 (usage and input errors)", () => {
     ["min-reruns below 1", ["analyze", suite, "--min-reruns", "0"]],
     ["unknown flag", ["analyze", suite, "--wat"]],
     ["unsupported format", ["ci", suite, "--format", "teamcity"]],
-    // Regression: analyze used to accept and ignore both ci-only flags, so
-    // `analyze --fail-above 0.5` was a CI gate that could never fail.
     ["ci-only --fail-above on analyze", ["analyze", suite, "--fail-above", "0.5"]],
     ["ci-only --format on analyze", ["analyze", suite, "--format", "github"]],
   ];
@@ -226,8 +207,6 @@ describe("exit code 2 (usage and input errors)", () => {
     });
   }
 
-  // Regression: an unexpected throw escaped run() and took Node's default exit 1,
-  // which the contract reserves for "threshold exceeded".
   it("exits 2, not 1, when the history file cannot be written", () => {
     const { status } = runCli([
       "ci", suite, "--commit", "v1", "--history", join(tmp(), "missing-dir", "h.jsonl"),
@@ -235,7 +214,6 @@ describe("exit code 2 (usage and input errors)", () => {
     expect(status).toBe(2);
   });
 
-  // Regression: the no-command usage text went to stdout while exiting 2.
   it("sends the no-command usage error to stderr, leaving stdout clean", () => {
     const { status, stdout, stderr } = runCli([]);
     expect(status).toBe(2);
@@ -255,8 +233,6 @@ describe("exit code 2 (usage and input errors)", () => {
   });
 });
 
-// Commander defaults to exit 1 on usage errors, which the v1 contract reserves for
-// "threshold exceeded". These pin the exitOverride mapping after the framework swap.
 describe("commander exit-code contract", () => {
   const cases: [string, string[], number][] = [
     ["unknown flag on analyze", ["analyze", suite, "--nope"], 2],
@@ -284,6 +260,6 @@ describe("mixed input formats", () => {
     ) as Report;
     expect(report.summary.tests).toBe(3);
     expect(report.tests[0]!.test_id).toBe("login_flow");
-    expect(report.tests[0]!.score).toBe(1); // [pass, fail, pass] -> flipRate 1.0
+    expect(report.tests[0]!.score).toBe(1);
   });
 });

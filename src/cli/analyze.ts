@@ -9,15 +9,14 @@ import {
     readHistory,
     warnCorrupt,
 } from "../ingest.js";
-import {buildReport, isWithinBaseline, renderGithub, renderHuman, renderMarkdown, type Report,} from "../report.js";
+import {buildReport, isWithinBaseline, renderGithub, renderHuman, renderMarkdown, type BuildOptions, type Report} from "../report.js";
 import {groupByTestAndVersion} from "../score.js";
-import {numberOption, parseScoreParams, type ReportOptions, type ScoreParams} from "./options.js";
+import {numberOption, parseScoreParams, type ReportOptions} from "./options.js";
 
-/** Ingest (optionally folding into history) and score — shared by analyze/ci/baseline. */
 export function loadReport(
     inputs: string[],
     values: ReportOptions,
-    params: ScoreParams,
+    params: BuildOptions,
 ): { report: Report; files: string[] } {
     const files = expandInputs(inputs);
     const version = values.commit ?? detectCommit();
@@ -32,19 +31,17 @@ export function loadReport(
     return {report: buildReport(groupByTestAndVersion(runs), params), files};
 }
 
-export async function runReport(
+export function runReport(
     command: "analyze" | "ci",
     inputs: string[],
     values: ReportOptions,
-): Promise<number> {
+): number {
     const params = parseScoreParams(values);
     const top = numberOption(values.top, "top", 10);
     const failAbove = values.failAbove === undefined ? null : numberOption(values.failAbove, "fail-above", 0);
     if (values.format !== undefined && values.format !== "github" && values.format !== "markdown") {
         throw new InputError(`--format must be github or markdown, got "${values.format}"`);
     }
-    // Both write to stdout and only one can own it; silently picking a winner would
-    // hand a PR-comment pipeline a JSON blob (or vice versa) with exit 0.
     if (values.format === "markdown" && values.json) {
         throw new InputError("--format markdown and --json are mutually exclusive");
     }
@@ -61,18 +58,18 @@ export async function runReport(
         if (values.format !== undefined && values.format !== "markdown") throw ciOnly("format");
         if (values.baseline !== undefined) throw ciOnly("baseline");
     }
-    // A missing baseline file is an empty baseline (first run in a fresh repo); a
-    // corrupt one is an input error, because silently gating on nothing is worse.
     const baseline = values.baseline === undefined ? null : readBaseline(values.baseline);
 
     const {report, files} = loadReport(inputs, values, params);
-    const overThreshold = failAbove === null ? [] : report.tests.filter((t) => t.gating_score > failAbove);
-    const baselinedBreaches = overThreshold.filter((t) => baseline !== null && isWithinBaseline(t, baseline));
-    const newBreaches = overThreshold.filter((t) => baseline === null || !isWithinBaseline(t, baseline));
-
-
-    if (!values.json && values.format !== 'markdown') {
-        process.stdout.write(`${renderHuman(report, top, files.length, baseline)}\n`);
+    const baselinedBreaches: Report["tests"] = [];
+    const newBreaches: Report["tests"] = [];
+    if (failAbove !== null) {
+        for (const test of report.tests) {
+            if (test.gating_score > failAbove) {
+                const breaches = baseline && isWithinBaseline(test, baseline) ? baselinedBreaches : newBreaches;
+                breaches.push(test);
+            }
+        }
     }
 
     if (values.json) {
@@ -95,17 +92,15 @@ export async function runReport(
         );
     } else if (values.format === "markdown") {
         process.stdout.write(renderMarkdown(report, top, baseline));
+    } else {
+        process.stdout.write(`${renderHuman(report, top, files.length, baseline)}\n`);
     }
 
     if (command === "ci" && values.format === "github") {
         const {annotations, markdown} = renderGithub(report, baseline);
-        // Under --json, stdout is the machine payload and must stay parseable. GitHub
-        // picks workflow commands off stderr just as well, so annotations move there.
         const stream = values.json ? process.stderr : process.stdout;
         for (const line of annotations) stream.write(`${line}\n`);
         const summaryPath = process.env["GITHUB_STEP_SUMMARY"];
-        // Best-effort: the job summary is cosmetic, so an unwritable path warns
-        // instead of failing the step (exit 2 is for bad input, not decoration).
         if (summaryPath) {
             try {
                 appendFileSync(summaryPath, `${markdown}\n`, "utf8");
