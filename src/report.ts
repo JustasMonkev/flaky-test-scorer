@@ -35,7 +35,6 @@ export function isWithinBaseline(
 
 export type BaselineStatus = "new" | "regression" | "baselined";
 
-/** Where a flaky test stands against the baseline — one wording for every surface. */
 export function baselineStatus(
   test: Pick<ReportTest, "test_id" | "gating_score">,
   baseline: Baseline,
@@ -72,7 +71,6 @@ export function buildReport(
 
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-// Shared sentences: renderHuman and renderGithub must not drift apart in wording.
 const flakinessLine = (s: Report["summary"]): string =>
   `${plural(s.flaky, "test")} show${s.flaky === 1 ? "s" : ""} flakiness (${s.very_flaky} very flaky), ${plural(s.low_data, "test")} need${s.low_data === 1 ? "s" : ""} more data.`;
 
@@ -85,13 +83,7 @@ function baselineCounts(flaky: ReportTest[], baseline: Baseline) {
 const baselineLine = ({ newly, regressions, baselined }: ReturnType<typeof baselineCounts>): string =>
   `${newly} newly flaky, ${plural(regressions, "baseline regression")}, ${baselined} baselined (known flaky).`;
 
-/**
- * The flaky tests in display order: newly-flaky first, baselined after, stable
- * within each group. Every surface slices a top-N off this list, and a repo with
- * 20 baselined tests used to fill all 10 slots (and the paid --explain budget)
- * with tests the user has already accepted, hiding the one regression the
- * baseline exists to surface.
- */
+/** Keep rank order within each group, with baselined tests last. */
 export function flakyRanked(
   report: Report,
   baseline: Baseline | null = null,
@@ -105,12 +97,11 @@ export function flakyRanked(
 }
 
 function evidenceLines(test: ReportTest): string[] {
-  const lines: string[] = [];
   const { transitions, within_version_flips, within_run_retries, duration_variance, failure_clusters } =
     test.evidence;
-  lines.push(
+  const lines = [
     `${plural(transitions.flips, "outcome flip")} in ${transitions.total_runs} runs across ${plural(test.num_versions, "version")}`,
-  );
+  ];
   if (within_version_flips > 0) {
     lines.push(`fails on unchanged commit in ${plural(within_version_flips, "version")}`);
   }
@@ -146,15 +137,14 @@ export function renderHuman(
     out.push("", "No flaky tests detected.");
     return out.join("\n");
   }
-  // Clamp: a negative --top must not silently drop the last row via slice(0, -1).
   const suspects = flaky.slice(0, Math.max(0, top));
 
   for (const test of suspects) {
-    out.push("");
     out.push(
+      "",
       `#${test.rank}  ${test.verdict}  score ${test.score.toFixed(3)}  conf ${test.confidence.toFixed(2)}  gating score ${test.gating_score.toFixed(3)}${test.low_data ? "  [LOW DATA]" : ""}${baseline ? `  [${baselineStatus(test, baseline).toUpperCase()}]` : ""}`,
+      `    ${test.test_id}`,
     );
-    out.push(`    ${test.test_id}`);
     for (const line of evidenceLines(test)) out.push(`    - ${line}`);
     out.push(`    - likely cause: ${test.likely_cause.category} (${test.likely_cause.confidence} confidence, heuristic)`);
     out.push(`    -> ${test.recommendation}`);
@@ -162,16 +152,10 @@ export function renderHuman(
   return out.join("\n");
 }
 
-/** First line of the PR comment body; the action greps for it to update in place. */
+/** Identifies a sticky PR comment for updates in place. */
 export const MARKDOWN_MARKER = "<!-- flaky-test-scorer -->";
 
-/**
- * Inline code span that survives an arbitrary test id inside a GFM table cell.
- * A test name is attacker-supplied: an unescaped `|` opens a new column and a
- * backtick closes the span, so `a | b \`x\` <img ...>` rewrote the table and
- * leaked raw HTML into the PR comment. GFM honours `\|` even inside code spans,
- * and a fence one backtick longer than the longest run inside always holds.
- */
+// GFM table pipes need escaping even inside code spans.
 function mdCode(text: string): string {
   const safe = text.replace(/\|/g, "\\|");
   const longest = Math.max(0, ...[...safe.matchAll(/`+/g)].map((m) => m[0].length));
@@ -180,10 +164,6 @@ function mdCode(text: string): string {
   return `${fence}${pad}${safe}${pad}${fence}`;
 }
 
-/**
- * Sticky PR-comment body (SPEC-V3 F7). Deterministic: the marker, a fixed-order
- * summary table, then the same ranked order the rest of the report uses.
- */
 export function renderMarkdown(
   report: Report,
   top: number,
@@ -192,21 +172,14 @@ export function renderMarkdown(
   const flaky = flakyRanked(report, baseline);
   const flakyIds = new Set(flaky.map((t) => t.test_id));
   const counts = baseline ? baselineCounts(flaky, baseline) : null;
-  // Recovered = baselined ids the current run no longer flags. Sorted, since a
-  // Map's iteration order is insertion order and the comment must diff cleanly.
-  //
-  // ponytail: a baselined id ABSENT from the report (deleted, renamed, or simply
-  // not run in this shard) also counts as recovered. Ceiling — sharded CI can show
-  // phantom recoveries. Narrowing it to `present && score === 0` is a one-line
-  // change but a semantics change: it contradicts two committed tests and the
-  // README example, so it wants a SPEC decision rather than a drive-by fix.
+  // Baseline IDs absent from the current report also count as recovered.
   const recovered = baseline ? [...baseline.keys()].filter((id) => !flakyIds.has(id)).sort() : [];
 
-  const summary: [string, number][] = baseline
+  const summary: [string, number][] = counts
     ? [
-        ["newly flaky", counts!.newly],
-        ["baseline regressions", counts!.regressions],
-        ["baselined (known flaky)", counts!.baselined],
+        ["newly flaky", counts.newly],
+        ["baseline regressions", counts.regressions],
+        ["baselined (known flaky)", counts.baselined],
         ["recovered since baseline", recovered.length],
       ]
     : [
@@ -250,12 +223,7 @@ export function renderMarkdown(
   return out.join("\n");
 }
 
-/**
- * Workflow-command escaping. The runner percent-decodes annotation text, so a test
- * name literally containing `%0A` arrives as a newline inside the annotation — the
- * markdown path escapes its metacharacters and this one did not. `cleanTestId`
- * already removed real control characters, so escaping `%` is the whole job.
- */
+// Preserve literal percent escapes when the runner decodes annotations.
 const ghEscape = (text: string): string => text.replace(/%/g, "%25");
 
 /** `::warning` annotations plus a markdown job summary for GitHub Actions. */
@@ -264,8 +232,6 @@ export function renderGithub(
   baseline: Baseline | null = null,
 ): { annotations: string[]; markdown: string } {
   const flaky = flakyRanked(report, baseline);
-  // Baselined tests annotate as ::notice, not ::warning: they are already known and
-  // must not read as a new regression in the PR's file view.
   const annotations = flaky.map((t) => {
     const known = baseline ? isWithinBaseline(t, baseline) : false;
     return `::${known ? "notice" : "warning"} title=Flaky test${known ? " (baselined)" : ""}::${ghEscape(t.test_id)} — ${t.verdict} (score ${t.score.toFixed(3)}, gating score ${t.gating_score.toFixed(3)}, likely ${t.likely_cause.category}). ${t.recommendation}`;

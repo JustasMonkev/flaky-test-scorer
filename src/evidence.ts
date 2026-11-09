@@ -60,7 +60,6 @@ export function recommendationFor(category: CauseCategory): string {
 export function normalizeMessage(message: string): string {
   return message
     .replace(/\s+/g, " ")
-    // Both separators: Windows stack traces clustered as distinct patterns without `\`.
     .replace(/(?:[A-Za-z]:)?(?:[\w.@-]*[/\\])+[\w.@-]+/g, "<path>")
     .replace(/\b\d+(?:\.\d+)?\s*(?:ms|s|sec|secs|seconds|m|min|mins|minutes)\b/gi, "<dur>")
     .replace(/\b0x[0-9a-f]+\b/gi, "<hex>")
@@ -82,8 +81,7 @@ function clusters(messages: string[]): FailureCluster[] {
   return [...groups.values()].sort((a, b) => b.count - a.count).slice(0, 3);
 }
 
-// Keywords match at a word start (so "oom" does not fire on "boom") but may be
-// prefixes ("concurren" -> "concurrency").
+// Match at word starts and allow prefixes such as "concurren".
 const PATTERNS: [CauseCategory, RegExp[]][] = KEYWORDS.map(([category, keywords]) => [
   category,
   keywords.map((k) => new RegExp(`\\b${k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`)),
@@ -91,14 +89,12 @@ const PATTERNS: [CauseCategory, RegExp[]][] = KEYWORDS.map(([category, keywords]
 
 export function classify(messages: string[]): LikelyCause {
   const counts = new Map<CauseCategory, number>();
-  let classified = 0;
   for (const message of messages) {
     const text = message.toLowerCase();
     for (const [category, patterns] of PATTERNS) {
       if (patterns.some((re) => re.test(text))) {
         counts.set(category, (counts.get(category) ?? 0) + 1);
-        classified++;
-        break; // first matching category owns the message
+        break;
       }
     }
   }
@@ -113,13 +109,13 @@ export function classify(messages: string[]): LikelyCause {
     }
   }
 
-  const dominance = classified > 0 ? bestCount / messages.length : 0;
+  const dominance = bestCount > 0 ? bestCount / messages.length : 0;
   const confidence =
     bestCount >= 3 && dominance >= 0.7 ? "high" : bestCount >= 2 && dominance >= 0.5 ? "medium" : "low";
 
   return {
     category: best,
-    confidence: best === "unknown" ? "low" : confidence,
+    confidence,
     matched_messages: bestCount,
     heuristic: true,
   };
@@ -174,7 +170,7 @@ export function buildEvidence(
 
     for (const group of executionGroups) {
       const outcomes = group.map((run) => run.result);
-      if (outcomes.length > 1 && outcomes.includes(true) && outcomes.includes(false)) {
+      if (outcomes.includes(true) && outcomes.includes(false)) {
         withinRunRetries++;
       }
     }
