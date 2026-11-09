@@ -1,17 +1,7 @@
-/**
- * Playwright reporter that streams every attempt (including retries) into the
- * flaky-test-scorer history JSONL.
- *
- * Structural typing only — @playwright/test is never imported, at type level or
- * runtime, so installing this package pulls in no test-runner dependency.
- *
- *   // playwright.config.ts
- *   reporter: [["flaky-test-scorer/reporter/playwright", { history: ".flaky-history.jsonl" }]]
- */
-import { createHash } from "node:crypto";
 import { relative } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { appendHistory, detectCommit, joinTestId, readHistory } from "../ingest.js";
+import { playwrightExecutionId } from "../ingest/playwright.js";
 import type { RunRecord } from "../score.js";
 
 export interface FlakyReporterOptions {
@@ -20,8 +10,6 @@ export interface FlakyReporterOptions {
   /** Version/commit for these runs. Default: auto-detected (env, then git). */
   commit?: string;
 }
-
-// --- the slices of the Playwright API this reporter actually touches ---------
 
 interface SuiteLike {
   title: string;
@@ -45,13 +33,8 @@ interface TestResultLike {
   error?: { message?: string } | undefined;
 }
 
-interface ConfigLike {
-  rootDir?: string;
-}
-
-/** Repo-relative posix path — the same shape the Playwright JSON ingester records. */
 const posixRel = (root: string, file: string): string =>
-  relative(root, file).split("\\").join("/");
+  relative(root, file).replaceAll("\\", "/");
 
 function ancestors(test: TestCaseLike): SuiteLike[] {
   const chain: SuiteLike[] = [];
@@ -59,11 +42,6 @@ function ancestors(test: TestCaseLike): SuiteLike[] {
   return chain;
 }
 
-/**
- * `file > project? > title path` — identical to the ids the Playwright JSON
- * ingester produces (SPEC-V3 F2), so reporter history and imported JSON reports
- * describe the same test.
- */
 export function playwrightTestId(test: TestCaseLike, rootDir: string): string {
   const chain = ancestors(test);
   const fileSuite = chain.find((s) => s.type === "file")?.title;
@@ -87,15 +65,13 @@ export default class FlakyHistoryReporter {
     this.commit = options.commit;
   }
 
-  onBegin(config?: ConfigLike): void {
+  onBegin(config?: { rootDir?: string }): void {
     if (config?.rootDir) this.rootDir = config.rootDir;
   }
 
   onTestEnd(test: TestCaseLike, result: TestResultLike): void {
-    // skipped has no outcome; interrupted means the whole run was aborted —
-    // scoring either as a failure would invent flakiness.
     if (result.status === "skipped" || result.status === "interrupted") return;
-    const failed = result.status !== "passed";
+    const passed = result.status === "passed";
     const startTime =
       result.startTime instanceof Date ? result.startTime.toISOString() : (result.startTime ?? null);
     const file = test.location?.file ? posixRel(this.rootDir, test.location.file) : null;
@@ -104,14 +80,13 @@ export default class FlakyHistoryReporter {
 
     this.pending.push({
       test_id: testId,
-      result: !failed,
-      version: null, // filled in at onEnd, where a single commit lookup covers the run
+      result: passed,
+      version: null,
       timestamp: startTime,
       duration_s: typeof result.duration === "number" ? result.duration / 1000 : null,
-      // Playwright error messages are full of ANSI colour, which wrecks clustering.
-      failure_message: failed
-        ? (result.error?.message ? stripVTControlCharacters(result.error.message).slice(0, 2000) : result.status)
-        : null,
+      failure_message: passed
+        ? null
+        : result.error?.message ? stripVTControlCharacters(result.error.message).slice(0, 2000) : result.status,
       source_file: file,
       attempt: typeof result.retry === "number" ? result.retry : 0,
       case_id: caseId,
@@ -130,10 +105,7 @@ export default class FlakyHistoryReporter {
     const ids = new Map(
       [...chains].map(([caseId, chain]) => [
         caseId,
-        `pw:${createHash("sha256")
-          .update(JSON.stringify([caseId, chain.map((run) => [run.attempt, run.timestamp, run.result])]))
-          .digest("hex")
-          .slice(0, 32)}`,
+        playwrightExecutionId([caseId, chain.map((run) => [run.attempt, run.timestamp, run.result])]),
       ]),
     );
     const runs = this.pending.map(({ case_id, ...run }) => ({
@@ -141,7 +113,7 @@ export default class FlakyHistoryReporter {
       version,
       execution_id: ids.get(case_id)!,
     }));
-    this.pending = []; // a second onEnd must not re-append (Playwright merges reports)
+    this.pending = [];
     appendHistory(this.historyPath, readHistory(this.historyPath).runs, runs);
   }
 }

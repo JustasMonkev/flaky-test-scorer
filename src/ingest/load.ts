@@ -8,12 +8,8 @@ import { isPlaywrightReport, parsePlaywrightReport } from "./playwright.js";
 import { parseCsv, runsFromRows } from "./rows.js";
 
 export function loadFile(file: string, version: string | null): RunRecord[] {
-  // .jsonl is this tool's own history format: line-delimited, so never a single JSON
-  // doc, and readHistory reads it itself — no second full read of a large history.
-  // SPEC.md: corrupt lines are skipped with a stderr warning. Only the --history
-  // path used to warn, so `analyze .flaky-history.jsonl` scored a truncated file
-  // silently — the exact recipe the Playwright reporter's README hands out.
-  if (file.toLowerCase().endsWith(".jsonl")) {
+  const lower = file.toLowerCase();
+  if (lower.endsWith(".jsonl")) {
     if (!existsSync(file)) throw new InputError(`cannot read ${file}: no such file`);
     const { runs, corruptLines } = readHistory(file);
     warnCorrupt(corruptLines, file);
@@ -27,13 +23,7 @@ export function loadFile(file: string, version: string | null): RunRecord[] {
     throw new InputError(`cannot read ${file}: ${(err as Error).message}`);
   }
 
-  // `source_file` is stored relative to cwd, never as the absolute path the input
-  // expansion resolved. History files are cached and shared between machines, so an
-  // absolute path leaks the local layout, churns the diff, and — because it is part
-  // of the dedup identity — made the same artifact from `_work/1` and `_work/2`
-  // count twice. The Playwright reporter already records repo-relative paths.
   const label = relPosix(file) || file;
-  const lower = file.toLowerCase();
   if (lower.endsWith(".csv")) return runsFromRows(parseCsv(text), label, version);
   if (lower.endsWith(".json")) {
     let data: unknown;
@@ -62,10 +52,9 @@ export function loadFile(file: string, version: string | null): RunRecord[] {
 }
 
 export function loadRuns(files: string[], version: string | null): RunRecord[] {
-  const perFile = files.map((file) => loadFile(file, version));
-  const runs = perFile.flat();
+  const runs = files.flatMap((file) => loadFile(file, version));
   if (runs.length === 0) {
-    const empty = files.filter((_, i) => perFile[i]!.length === 0);
+    const empty = files.flat();
     const named = empty.slice(0, 5).join(", ") + (empty.length > 5 ? `, +${empty.length - 5} more` : "");
     throw new InputError(
       `no usable test runs found in ${empty.length} file(s): ${named}. JUnit XML needs <testcase> ` +

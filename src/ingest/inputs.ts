@@ -27,8 +27,6 @@ function walk(dir: string, recursive: boolean, out: string[] = []): string[] {
   try {
     entries = readdirSync(dir, { withFileTypes: true });
   } catch (err) {
-    // Mode-000 subdirectories and dead mounts are ordinary CI-runner conditions,
-    // not bugs: name the directory instead of printing a scandir stack.
     throw new InputError(`cannot read directory ${dir}: ${(err as Error).message}`);
   }
   for (const entry of entries) {
@@ -53,7 +51,6 @@ export function expandInputs(patterns: string[], cwd = process.cwd()): string[] 
       } else found.add(resolve(pattern));
       continue;
     }
-    // Search from the longest literal directory prefix of the pattern.
     const parts = pattern.split("/");
     const wildcardAt = parts.findIndex((p) => /[*?]/.test(p));
     const literal = parts.slice(0, wildcardAt).join("/");
@@ -62,12 +59,11 @@ export function expandInputs(patterns: string[], cwd = process.cwd()): string[] 
 
     const re = globToRegExp(pattern);
     for (const file of walk(base, pattern.includes("**") || wildcardAt < parts.length - 1)) {
-      const rel = relPosix(file, cwd);
-      if (re.test(rel) || re.test(resolve(file).split(sep).join("/"))) found.add(resolve(file));
+      const absolute = resolve(file);
+      if (re.test(relPosix(file, cwd)) || re.test(absolute.split(sep).join("/"))) found.add(absolute);
     }
   }
   if (found.size === 0) throw new InputError(`no input files matched: ${patterns.join(", ")}`);
-  // Numeric-aware: file order is the chronological fallback for timestamp-less JUnit,
-  // and plain sort() puts run-10 before run-2, which shuffles an order-sensitive flipRate.
+  // File order breaks ties for JUnit runs without timestamps.
   return [...found].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
 }

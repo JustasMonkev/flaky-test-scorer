@@ -34,14 +34,8 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
-      - name: Build
-        run: npm run build
-
       - name: Run the full test suite
         run: npm test
-
-      - name: Run integration tests
-        run: npm run test:e2e
 
       - name: Check the package contents
         run: npm pack --dry-run

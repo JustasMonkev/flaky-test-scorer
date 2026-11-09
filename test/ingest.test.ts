@@ -45,7 +45,6 @@ describe("JUnit XML parsing", () => {
   const runs = loadFile(join(fixtures, "junit-nested.xml"), "sha1");
 
   it("walks nested testsuites and drops skipped cases", () => {
-    // A suite's own cases are emitted before its nested suites' cases.
     expect(runs.map((r) => r.test_id)).toEqual([
       "no classname",
       "pkg.Outer > bare failure",
@@ -81,14 +80,12 @@ describe("JUnit XML parsing", () => {
     expect(() => loadRuns([join(fixtures, "junit-empty-ok.xml")], null)).toThrow();
   });
 
-  // Regression: the message counted files but never said which one was empty.
   it("names the files that produced no runs", () => {
     expect(() => loadRuns([join(fixtures, "junit-empty-ok.xml")], null)).toThrow(
       /junit-empty-ok\.xml/,
     );
   });
 
-  // Regression: a <testcase> hanging directly off <testsuites> was silently dropped.
   it("ingests a testcase with no <testsuite> wrapper", () => {
     const parsed = parseJUnit(
       '<testsuites timestamp="2024-05-01T09:00:00"><testcase classname="C" name="loose"/></testsuites>',
@@ -100,7 +97,6 @@ describe("JUnit XML parsing", () => {
     ]);
   });
 
-  // Regression: status="failed" with no <failure> child was recorded as a pass.
   it("honours a status attribute when no failure element is present", () => {
     const parsed = parseJUnit(
       '<testsuite name="s">' +
@@ -346,8 +342,6 @@ describe("input expansion", () => {
     expect(files).toHaveLength(4);
   });
 
-  // Regression: plain sort() put run-10 before run-2, and file order is the
-  // chronological fallback for JUnit without suite timestamps, so flipRate shifted.
   it("orders numbered files naturally, not lexicographically", () => {
     const dir = tmp();
     for (const n of [1, 2, 3, 10, 11]) writeFileSync(join(dir, `run-${n}.xml`), "<testsuite/>");
@@ -422,8 +416,6 @@ describe("history JSONL", () => {
     });
   });
 
-  // Regression: .jsonl went down the JSON.parse path, so a history file sitting in a
-  // scanned directory (the action writes one there) made the whole run exit 2.
   it("is ingestable as a plain input file, not just via --history", () => {
     const file = join(tmp(), "history.jsonl");
     writeFileSync(
@@ -433,8 +425,6 @@ describe("history JSONL", () => {
     expect(loadFile(file, "ignored").map((r) => r.result)).toEqual([true, false]);
   });
 
-  // Regression: appending onto a history truncated mid-line (killed process) fused
-  // the partial record and the new one into a single corrupt line.
   it("appends safely to a history that does not end in a newline", () => {
     const file = join(tmp(), "history.jsonl");
     writeFileSync(file, '{"test_id":"a","result":"pass","version":"v1"}'); // no trailing \n
@@ -466,12 +456,10 @@ describe("history JSONL", () => {
     const first = appendHistory(file, readHistory(file).runs, incoming);
     expect(first).toHaveLength(12);
 
-    // Re-ingesting the same artifacts must not double-count.
     const second = appendHistory(file, readHistory(file).runs, incoming);
     expect(second).toHaveLength(12);
     expect(readHistory(file).runs).toHaveLength(12);
 
-    // A genuinely new run does get appended.
     const third = appendHistory(file, readHistory(file).runs, [
       { ...incoming[0]!, timestamp: "2024-06-01T10:00:00", source_file: "run-5.xml" },
     ]);
@@ -479,8 +467,6 @@ describe("history JSONL", () => {
     expect(readFileSync(file, "utf8").trim().split("\n")).toHaveLength(13);
   });
 
-  // Regression: a rerun of the same artifact that flipped pass->fail survives
-  // while a true re-upload still dedups.
   it("treats a flipped outcome at the same path/version/timestamp as a new run", () => {
     const file = join(tmp(), "history.jsonl");
     const passed = {

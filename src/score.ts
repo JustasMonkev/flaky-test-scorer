@@ -1,23 +1,12 @@
-/**
- * Faithful port of the Python scorer (score_flakiness.py).
- * Numeric behaviour stays identical for ordinary histories: the same rounding
- * points, aggregation formulas, sort keys, and verdict bands.
- */
-
 export interface RunRecord {
   test_id: string;
-  /** true = pass, false = fail */
   result: boolean;
   version: string | null;
   timestamp: string | number | null;
   duration_s: number | null;
   failure_message: string | null;
   source_file: string | null;
-  /**
-   * 0-based retry attempt index within ONE execution (Surefire reruns, Playwright
-   * retries). Absent for single-attempt runs, so ordinary history lines keep their
-   * v1 shape. Attempts of one execution are consecutive and restart at 0.
-   */
+  /** Zero-based retry index, omitted for legacy single-attempt records. */
   attempt?: number | null;
   /** Stable identity shared by every retry attempt of one execution. */
   execution_id?: string | null;
@@ -40,22 +29,15 @@ export interface ScoredTest {
   low_data: boolean;
 }
 
-// An exact .00005 tie: only reachable for values with <= 5 decimals, which
-// toFixed(30) therefore renders exactly (no rounding of its own).
 const EXACT_TIE_AT_4DP = /\.\d{4}50{25}$/;
 
-/**
- * Python's round(x, 4). Both round the exact binary value, but Python breaks
- * exact .00005 ties to even while toFixed() always breaks them upward — and
- * those ties are reachable (flipRate 1/32 = 0.03125 -> Python 0.0312, not 0.0313),
- * where the rounded score also drives rank order.
- */
+/** Python-compatible rounding uses ties-to-even for exact halfway values. */
 export function round4(value: number): number {
   const exact = value.toFixed(30);
   if (!EXACT_TIE_AT_4DP.test(exact)) return Number(value.toFixed(4));
   const cut = exact.indexOf(".") + 5;
   const truncated = Number(exact.slice(0, cut));
-  return exact.charCodeAt(cut - 1) % 2 === 0 // '0'.charCodeAt(0) is even, so digit parity holds
+  return Number(exact[cut - 1]) % 2 === 0
     ? truncated
     : Number((truncated + Math.sign(value) * 1e-4).toFixed(4));
 }
@@ -73,7 +55,6 @@ export function entropy(results: boolean[]): number {
   return score;
 }
 
-/** Number of consecutive run pairs that flip pass/fail — THE definition of a flip. */
 export function countFlips(results: boolean[]): number {
   let flips = 0;
   for (let i = 1; i < results.length; i++) {
@@ -82,7 +63,6 @@ export function countFlips(results: boolean[]): number {
   return flips;
 }
 
-/** Fraction of consecutive run pairs that flip pass/fail. */
 export function flipRate(results: boolean[]): number {
   const count = results.length;
   return count < 2 ? 0 : countFlips(results) / (count - 1);
@@ -95,19 +75,15 @@ function sampleWeights(versionScores: number[], weights: number[] | undefined): 
     : undefined;
 }
 
-function weightedMean(values: number[], weights: number[] | undefined): number {
-  if (values.length === 0) return 0;
-  const usableWeights = sampleWeights(values, weights);
-  if (!usableWeights) return values.reduce((a, b) => a + b, 0) / values.length;
+/** Optional weights are independent run counts. */
+export function aggregateUnweighted(versionScores: number[], weights?: number[]): number {
+  if (versionScores.length === 0) return 0;
+  const usableWeights = sampleWeights(versionScores, weights);
+  if (!usableWeights) return versionScores.reduce((a, b) => a + b, 0) / versionScores.length;
   const denominator = usableWeights.reduce((a, weight) => a + weight, 0);
   return denominator > 0
-    ? values.reduce((sum, value, index) => sum + value * usableWeights[index]!, 0) / denominator
+    ? versionScores.reduce((sum, value, index) => sum + value * usableWeights[index]!, 0) / denominator
     : 0;
-}
-
-/** Mean of per-version scores. Optional weights are independent run counts. */
-export function aggregateUnweighted(versionScores: number[], weights?: number[]): number {
-  return weightedMean(versionScores, weights);
 }
 
 /** Exponentially weighted moving average across versions (newest last). */
@@ -116,7 +92,6 @@ export function aggregateWeighted(
   lam = 0.1,
   weights?: number[],
 ): number {
-  if (versionScores.length === 0) return 0;
   let numerator = 0;
   let denominator = 0;
   const count = versionScores.length;
@@ -139,8 +114,8 @@ export function confidence(
   const dataFactor = 1 - 1 / Math.sqrt(Math.max(totalRuns, 1));
   if (versionScores.length < 2) return round4(dataFactor);
 
-  const mean = weightedMean(versionScores, weights);
-  const variance = weightedMean(versionScores.map((score) => (score - mean) ** 2), weights);
+  const mean = aggregateUnweighted(versionScores, weights);
+  const variance = aggregateUnweighted(versionScores.map((score) => (score - mean) ** 2), weights);
   return round4(dataFactor * Math.max(0, 1 - Math.sqrt(variance)));
 }
 
@@ -156,14 +131,12 @@ export type TimestampKey = [number, number, string];
 const NUMERIC = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 const ISO_LIKE = /^\d{4}-\d{2}-\d{2}/;
 
-/** Sortable key for numeric, ISO-like, or opaque timestamps. */
 export function timestampKey(value: string | number | null | undefined): TimestampKey {
   if (value === null || value === undefined || value === "") return [2, 0, ""];
   const text = String(value).trim();
   if (NUMERIC.test(text)) return [0, Number(text), text];
   if (ISO_LIKE.test(text)) {
-    // Date.parse treats offset-less date-times as local time. Add UTC explicitly
-    // so ordering does not change when the process runs in another timezone.
+    // Parse offset-less timestamps as UTC for consistent ordering across hosts.
     const normalized = /^\d{4}-\d{2}-\d{2}$/.test(text) ? `${text}T00:00:00` : text;
     const hasOffset = /(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(normalized);
     const parsed = Date.parse((hasOffset ? normalized : `${normalized}Z`).replace(/Z$/i, "+00:00"));
@@ -180,7 +153,6 @@ export function compareKeys(a: TimestampKey, b: TimestampKey): number {
 
 export const NO_VERSION = "__all__";
 
-/** test_id -> version -> chronologically ordered runs. Insertion order preserved. */
 export function groupByTestAndVersion(
   runs: RunRecord[],
 ): Map<string, Map<string, RunRecord[]>> {
@@ -209,60 +181,30 @@ export function validExecutionId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value);
 }
 
-function groupAdjacentAttempts(runs: RunRecord[]): RunRecord[][] {
-  const groups: RunRecord[][] = [];
-  let group: RunRecord[] = [];
-  let previousAttempt: number | null = null;
-
-  for (const run of runs) {
-    const attempt = run.attempt;
-    const valid = validAttempt(attempt);
-    if (!valid || previousAttempt === null || attempt !== previousAttempt + 1) {
-      if (group.length > 0) groups.push(group);
-      group = [run];
-    } else {
-      group.push(run);
-    }
-    previousAttempt = valid ? attempt : null;
-  }
-
-  if (group.length > 0) groups.push(group);
-  return groups;
-}
-
-/** Use producer IDs when present; old histories fall back to adjacent attempt indexes. */
+/** Legacy retry chains can only join adjacent attempts. */
 export function groupIndependentRuns(runs: RunRecord[]): RunRecord[][] {
   const groups: RunRecord[][] = [];
-  const identified = new Map<string, { group: RunRecord[]; previousAttempt: number | null }>();
-  let legacy: RunRecord[] = [];
-  const flushLegacy = () => {
-    groups.push(...groupAdjacentAttempts(legacy));
-    legacy = [];
-  };
+  const active = new Map<string | null, { group: RunRecord[]; previousAttempt: number | null }>();
 
   for (const run of runs) {
-    if (!validExecutionId(run.execution_id)) {
-      legacy.push(run);
-      continue;
-    }
-    flushLegacy();
-    const attempt = run.attempt;
-    const valid = validAttempt(attempt);
-    let state = identified.get(run.execution_id);
-    if (!state || !valid || state.previousAttempt === null || attempt !== state.previousAttempt + 1) {
-      state = { group: [run], previousAttempt: valid ? attempt : null };
-      identified.set(run.execution_id, state);
-      groups.push(state.group);
-    } else {
+    const executionId = run.execution_id;
+    const id = validExecutionId(executionId) ? executionId : null;
+    if (id !== null) active.delete(null);
+
+    const attempt = validAttempt(run.attempt) ? run.attempt : null;
+    const state = active.get(id);
+    if (state && state.previousAttempt !== null && attempt === state.previousAttempt + 1) {
       state.group.push(run);
       state.previousAttempt = attempt;
+    } else {
+      const group = [run];
+      groups.push(group);
+      active.set(id, { group, previousAttempt: attempt });
     }
   }
-  flushLegacy();
   return groups;
 }
 
-/** Count independent executions, joining only consecutive valid retry indexes. */
 export function countIndependentRuns(runs: RunRecord[]): number {
   return groupIndependentRuns(runs).length;
 }
@@ -274,7 +216,6 @@ export interface ScoreOptions {
   minReruns?: number;
 }
 
-/** One home for the scoring defaults — the CLI and MCP surfaces echo these. */
 export const SCORE_DEFAULTS = {
   metric: "flipRate",
   model: "weighted",
@@ -304,9 +245,6 @@ export function scoreTests(
       const executionGroups = groupIndependentRuns(runs);
       const versionIndependentRuns = executionGroups.length;
       independentRuns += versionIndependentRuns;
-      // A single ordinary observation cannot show instability. Retry attempts
-      // remain scoreable so a fail/pass chain is visible, but has one execution
-      // of confidence and therefore stays gated as low data by default.
       if (runs.length < 2) continue;
       perVersion.push(fn(executionGroups.flat().map((r) => r.result)));
       perVersionIndependentRuns.push(versionIndependentRuns);
@@ -318,11 +256,8 @@ export function scoreTests(
         : aggregateUnweighted(perVersion, perVersionIndependentRuns);
     const comparableRuns = perVersionIndependentRuns.reduce((sum, count) => sum + count, 0);
     const conf =
-      perVersion.length === 0
-        ? 0
-        : confidence(comparableRuns, perVersion, perVersionIndependentRuns);
-    const lowData =
-      perVersion.length === 0 || !perVersionIndependentRuns.some((count) => count >= minReruns);
+      perVersion.length === 0 ? 0 : confidence(comparableRuns, perVersion, perVersionIndependentRuns);
+    const lowData = !perVersionIndependentRuns.some((count) => count >= minReruns);
 
     rows.push({
       rank: 0,
@@ -339,8 +274,6 @@ export function scoreTests(
     });
   }
 
-  // Stable descending sort on (score, confidence, total_runs) — matches Python's
-  // sorted(..., reverse=True), which also preserves input order among equal keys.
   rows.sort(
     (a, b) => b.score - a.score || b.confidence - a.confidence || b.total_runs - a.total_runs,
   );

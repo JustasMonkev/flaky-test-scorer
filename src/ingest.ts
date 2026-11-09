@@ -1,6 +1,3 @@
-// Ingest entry point. The parsers, the history store and the baseline store live
-// in ./ingest/*; this file is the public surface they are re-exported through.
-
 export { InputError, cleanTestId, joinTestId, normalizeResult, warnCorrupt } from "./ingest/common.js";
 export { expandInputs } from "./ingest/inputs.js";
 export { parseJUnit } from "./ingest/junit.js";

@@ -3,13 +3,12 @@ import { SyntaxValidator } from "fast-xml-validator";
 import type { RunRecord } from "../score.js";
 import {
   asArray,
-  cleanTestId,
+  joinTestId,
   normalizeResult,
   numberOrNull,
   type XmlNode,
 } from "./common.js";
 
-// Maven Surefire retry children: each one is a separate failed attempt.
 const RETRY_TAGS = ["flakyFailure", "flakyError", "rerunFailure", "rerunError"] as const;
 
 const ARRAY_TAGS = new Set(["testsuite", "testcase", "failure", "error", "skipped", ...RETRY_TAGS]);
@@ -24,8 +23,6 @@ const xmlParser = new XMLParser({
 });
 
 function collectSuites(node: XmlNode, out: XmlNode[]): void {
-  // Any node carrying <testcase> children counts, including <testsuites> (or the
-  // document root) with no intermediate <testsuite> wrapper — writers emit that.
   if (node["testcase"] !== undefined) out.push(node);
   for (const suite of asArray(node["testsuite"])) collectSuites(suite, out);
   for (const suites of asArray(node["testsuites"])) collectSuites(suites, out);
@@ -42,7 +39,7 @@ function nodeText(node: unknown): string {
 }
 
 export function parseJUnit(xml: string, file: string, version: string | null): RunRecord[] {
-  SyntaxValidator.validate(xml)
+  SyntaxValidator.validate(xml);
   const root = xmlParser.parse(xml) as XmlNode;
   const suites: XmlNode[] = [];
   collectSuites(root, suites);
@@ -54,11 +51,10 @@ export function parseJUnit(xml: string, file: string, version: string | null): R
       if (testcase["skipped"] !== undefined) continue;
       const name = String(testcase["@_name"] ?? "").trim();
       const classname = String(testcase["@_classname"] ?? "").trim();
-      const testId = cleanTestId(classname ? (name ? `${classname} > ${name}` : classname) : name);
+      const testId = joinTestId([classname, name]);
       if (!testId) continue;
 
       const failures = [...asArray(testcase["failure"]), ...asArray(testcase["error"])];
-      // Some writers only set status="failed"/"error" and emit no <failure> child.
       const failed = failures.length > 0 || normalizeResult(testcase["@_status"]) === false;
       const message = failed
         ? failures.map(nodeText).filter(Boolean).join(" | ").slice(0, 2000) || "failure"
@@ -70,16 +66,12 @@ export function parseJUnit(xml: string, file: string, version: string | null): R
         timestamp: suiteTimestamp,
         source_file: file,
       };
-      // Surefire records each retry as its own child element; the <testcase> itself
-      // carries the FINAL outcome. Emitting attempts as ordered runs is what lets
-      // flipRate / within_version_flips see a same-commit flip at all.
       const retries = RETRY_TAGS.flatMap((tag) => asArray(testcase[tag]));
       retries.forEach((retry, i) => {
         runs.push({
           ...base,
           result: false,
-          // @_time on the testcase is the final attempt's duration, so attributing it
-          // to a retry would distort duration_variance.
+          // JUnit records the duration of the final attempt only.
           duration_s: null,
           failure_message: nodeText(retry).slice(0, 2000) || "failure",
           attempt: i,
