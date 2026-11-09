@@ -150,6 +150,23 @@ describe("ci", () => {
     expect(runCli(["ci", suite, "--commit", "v1", "--fail-above", "0.6"]).status).toBe(0);
   });
 
+  it("accepts a breach at its baseline ceiling and fails an unlisted breach", () => {
+    const baseline = join(tmp(), "baseline.json");
+    writeFileSync(baseline, JSON.stringify({
+      schema_version: 2,
+      tests: [{ test_id: "checkout > applies promo code", gating_score: 0.5 }],
+    }));
+
+    const { status, stdout, stderr } = runCli([
+      "ci", suite, "--commit", "v1", "--fail-above", "0.1", "--baseline", baseline, "--json",
+    ]);
+    expect(status).toBe(1);
+    expect(JSON.parse(stdout)).toMatchObject({
+      baselined_breaches: [{ test_id: "checkout > applies promo code", gating_score: 0.5 }],
+    });
+    expect(stderr).toContain("checkout > syncs inventory");
+  });
+
   it("emits ::warning annotations and a job summary with --format github", () => {
     const summaryFile = join(tmp(), "summary.md");
     const { stdout } = runCli(
