@@ -27,8 +27,6 @@ function walk(dir: string, recursive: boolean, out: string[] = []): string[] {
   try {
     entries = readdirSync(dir, { withFileTypes: true });
   } catch (err) {
-    // Mode-000 subdirectories and dead mounts are ordinary CI-runner conditions,
-    // not bugs: name the directory instead of printing a scandir stack.
     throw new InputError(`cannot read directory ${dir}: ${(err as Error).message}`);
   }
   for (const entry of entries) {
@@ -40,7 +38,6 @@ function walk(dir: string, recursive: boolean, out: string[] = []): string[] {
   return out;
 }
 
-/** Expand paths, directories and simple globs (`*`, `?`, `**`) into a sorted file list. */
 export function expandInputs(patterns: string[], cwd = process.cwd()): string[] {
   const found = new Set<string>();
   for (const pattern of patterns) {
@@ -67,7 +64,6 @@ export function expandInputs(patterns: string[], cwd = process.cwd()): string[] 
     }
   }
   if (found.size === 0) throw new InputError(`no input files matched: ${patterns.join(", ")}`);
-  // Numeric-aware: file order is the chronological fallback for timestamp-less JUnit,
-  // and plain sort() puts run-10 before run-2, which shuffles an order-sensitive flipRate.
+  // File order determines chronology for JUnit reports without timestamps.
   return [...found].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
 }

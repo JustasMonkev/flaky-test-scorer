@@ -15,8 +15,10 @@ import {
   parsePlaywrightReport,
   parseCsv,
   parseJUnit,
+  readBaseline,
   readHistory,
   runsFromRows,
+  writeBaseline,
   writeHistory,
 } from "../src/ingest.js";
 import { countIndependentRuns, groupByTestAndVersion } from "../src/score.js";
@@ -363,6 +365,30 @@ describe("input expansion", () => {
   it("fails loudly on a missing path", () => {
     expect(() => expandInputs(["./does-not-exist.xml"])).toThrow(InputError);
     expect(() => expandInputs(["test/fixtures/nope/*.xml"])).toThrow(/no input files matched/);
+  });
+});
+
+describe("baseline files", () => {
+  it("validates duplicate IDs before scores and keeps the file on failed writes", () => {
+    const path = join(tmp(), "baseline.json");
+    const tests = [
+      { test_id: "z", gating_score: 1 },
+      { test_id: "zero", gating_score: 0 },
+      { test_id: "a", gating_score: 0.5 },
+    ];
+    writeFileSync(path, JSON.stringify({ schema_version: 2, tests }));
+    expect(readBaseline(path).get("zero")).toBe(0);
+
+    expect(writeBaseline(path, tests)).toEqual([tests[2], tests[0]]);
+    expect([...readBaseline(path)]).toEqual([["a", 0.5], ["z", 1]]);
+
+    const written = readFileSync(path, "utf8");
+    const duplicate = [...tests, { test_id: "zero", gating_score: 2 }];
+    expect(() => writeBaseline(path, duplicate)).toThrow("tests[3].test_id is duplicated");
+    expect(readFileSync(path, "utf8")).toBe(written);
+
+    writeFileSync(path, JSON.stringify({ schema_version: 2, tests: duplicate }));
+    expect(() => readBaseline(path)).toThrow("tests[3].test_id is duplicated");
   });
 });
 
