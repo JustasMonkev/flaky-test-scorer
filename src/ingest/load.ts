@@ -1,19 +1,15 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import type { RunRecord } from "../score.js";
-import { InputError, relPosix, stripBom, warnCorrupt } from "./common.js";
+import { InputError, isRecord, relPosix, stripBom, warnCorrupt } from "./common.js";
 import { readHistory } from "./history.js";
 import { parseJUnit } from "./junit.js";
 import { isPlaywrightReport, parsePlaywrightReport } from "./playwright.js";
 import { parseCsv, runsFromRows } from "./rows.js";
 
 export function loadFile(file: string, version: string | null): RunRecord[] {
-  // .jsonl is this tool's own history format: line-delimited, so never a single JSON
-  // doc, and readHistory reads it itself — no second full read of a large history.
-  // SPEC.md: corrupt lines are skipped with a stderr warning. Only the --history
-  // path used to warn, so `analyze .flaky-history.jsonl` scored a truncated file
-  // silently — the exact recipe the Playwright reporter's README hands out.
-  if (file.toLowerCase().endsWith(".jsonl")) {
+  const lower = file.toLowerCase();
+  if (lower.endsWith(".jsonl")) {
     if (!existsSync(file)) throw new InputError(`cannot read ${file}: no such file`);
     const { runs, corruptLines } = readHistory(file);
     warnCorrupt(corruptLines, file);
@@ -27,13 +23,7 @@ export function loadFile(file: string, version: string | null): RunRecord[] {
     throw new InputError(`cannot read ${file}: ${(err as Error).message}`);
   }
 
-  // `source_file` is stored relative to cwd, never as the absolute path the input
-  // expansion resolved. History files are cached and shared between machines, so an
-  // absolute path leaks the local layout, churns the diff, and — because it is part
-  // of the dedup identity — made the same artifact from `_work/1` and `_work/2`
-  // count twice. The Playwright reporter already records repo-relative paths.
   const label = relPosix(file) || file;
-  const lower = file.toLowerCase();
   if (lower.endsWith(".csv")) return runsFromRows(parseCsv(text), label, version);
   if (lower.endsWith(".json")) {
     let data: unknown;
@@ -46,11 +36,7 @@ export function loadFile(file: string, version: string | null): RunRecord[] {
       );
     }
     if (isPlaywrightReport(data)) return parsePlaywrightReport(data, label, version);
-    if (data && !Array.isArray(data) && typeof data === "object") {
-      // SAFETY: the guard above narrows data to a non-null, non-array object.
-      const obj = data as Record<string, unknown>;
-      data = obj["runs"] ?? obj["results"];
-    }
+    if (isRecord(data)) data = data["runs"] ?? data["results"];
     if (!Array.isArray(data)) {
       throw new InputError(
         `${file}: JSON input must be a list of objects or an object with a runs/results list`,
@@ -75,11 +61,10 @@ export function loadRuns(files: string[], version: string | null): RunRecord[] {
   return runs;
 }
 
-/** The `version` stamped on ingested runs: CI env vars first, then git HEAD. */
 export function detectCommit(): string | null {
   for (const key of ["GITHUB_SHA", "CI_COMMIT_SHA", "GIT_COMMIT"]) {
-    const value = process.env[key];
-    if (value && value.trim()) return value.trim();
+    const value = process.env[key]?.trim();
+    if (value) return value;
   }
   try {
     return execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null;

@@ -1,9 +1,9 @@
 import { InputError } from "../ingest.js";
-import { SCORE_DEFAULTS, type Metric, type Model } from "../score.js";
+import type { BuildOptions } from "../report.js";
+import { SCORE_DEFAULTS, type Metric } from "../score.js";
 
 export const DEFAULT_BASELINE = ".flaky-baseline.json";
 
-/** Finite-number option. Range checks belong at the call site — this one has none. */
 export function numberOption(raw: string | undefined, name: string, fallback: number): number {
   if (raw === undefined) return fallback;
   const value = Number(raw);
@@ -25,14 +25,7 @@ export interface ReportOptions {
   baseline?: string;
 }
 
-export interface ScoreParams {
-  metric: Metric;
-  model: Model;
-  lam: number;
-  minReruns: number;
-}
-
-export function parseScoreParams(values: ReportOptions): ScoreParams {
+export function parseScoreParams(values: ReportOptions): BuildOptions {
   const raw = values.metric ?? SCORE_DEFAULTS.metric;
   const metricName = raw.toLowerCase();
   if (metricName !== "fliprate" && metricName !== "entropy") {

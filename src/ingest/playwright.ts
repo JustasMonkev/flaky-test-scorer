@@ -1,27 +1,21 @@
 import { createHash } from "node:crypto";
 import type { RunRecord } from "../score.js";
-import { asArray, joinTestId, numberOrNull, type XmlNode } from "./common.js";
+import { asArray, isRecord, joinTestId, numberOrNull, type XmlNode } from "./common.js";
 
-function isXmlNode(value: unknown): value is XmlNode {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-/** `--reporter json` output: an object whose `suites` is an array. Shape, not filename. */
 export function isPlaywrightReport(data: unknown): boolean {
-  return isXmlNode(data) && Array.isArray(data["suites"]);
+  return isRecord(data) && Array.isArray(data["suites"]);
 }
 
-/** Playwright result status -> pass / fail / drop (skipped or interrupted). */
 function playwrightResult(status: unknown): boolean | null {
   const value = String(status ?? "").toLowerCase();
   if (value === "passed") return true;
   if (value === "" || value === "skipped" || value === "interrupted") return null;
-  return false; // failed, timedOut, crashed
+  return false;
 }
 
 function playwrightError(result: XmlNode): string | null {
   const rawSingle = result["error"];
-  const single = isXmlNode(rawSingle) ? rawSingle["message"] : undefined;
+  const single = isRecord(rawSingle) ? rawSingle["message"] : undefined;
   if (typeof single === "string" && single.trim()) return single.slice(0, 2000);
   const many = asArray(result["errors"])
     .map((e) => (typeof e["message"] === "string" ? e["message"] : ""))
@@ -29,7 +23,7 @@ function playwrightError(result: XmlNode): string | null {
   return many.length > 0 ? many.join(" | ").slice(0, 2000) : null;
 }
 
-const executionId = (value: unknown): string =>
+export const playwrightExecutionId = (value: unknown): string =>
   `pw:${createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 32)}`;
 
 function walkPlaywrightSuite(
@@ -48,7 +42,6 @@ function walkPlaywrightSuite(
     for (const test of asArray(spec["tests"])) {
       const ordinal = executionCount.value++;
       const project = String(test["projectName"] ?? "").trim();
-      // Same " > " join as the JUnit ids so one history can hold both.
       const testId = joinTestId([here, project, ...titles, specTitle]);
       if (!testId) continue;
 
@@ -62,7 +55,7 @@ function walkPlaywrightSuite(
         result["parallelIndex"],
         outcome,
       ]);
-      const id = executionId([file, spec["id"] ?? "", ordinal, signature]);
+      const id = playwrightExecutionId([file, spec["id"] ?? "", ordinal, signature]);
 
       attempts.forEach(({ result, outcome }, i) => {
         const duration = numberOrNull(result["duration"]);
@@ -94,10 +87,8 @@ export function parsePlaywrightReport(
 ): RunRecord[] {
   const out: RunRecord[] = [];
   const executionCount = { value: 0 };
-  const root = isXmlNode(data) ? data : {};
-  for (const suite of asArray(root["suites"])) {
-    // Top-level suites are per-file: their title IS the file, so it must not also
-    // be pushed onto the describe-title trail.
+  for (const suite of asArray(isRecord(data) ? data["suites"] : undefined)) {
+    // The top-level title names the file, so it is excluded from the title trail.
     const specFile = String(suite["file"] ?? suite["title"] ?? "").trim();
     walkPlaywrightSuite(suite, specFile, [], file, version, out, executionCount);
   }

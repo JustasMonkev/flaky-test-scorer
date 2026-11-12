@@ -34,7 +34,6 @@
   "files": [
     "dist",
     "!dist/**/*.js.map",
-    "action.yml",
     "README.md"
   ],
   "scripts": {
@@ -43,7 +42,7 @@
     "pretest": "npm run build",
     "test": "vitest run",
     "pretest:e2e": "npm run build",
-    "test:e2e": "vitest run test/e2e.test.ts test/e2e-v3.test.ts test/playwright-real.test.ts test/package-real.test.ts",
+    "test:e2e": "vitest run test/playwright-real.test.ts",
     "typecheck": "tsc --project tsconfig.test.json",
     "prepublishOnly": "npm run build"
   },

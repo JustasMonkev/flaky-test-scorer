@@ -6,10 +6,6 @@ import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { Report } from "../src/report.js";
 
-// Provider flows run end-to-end against real seams in test/e2e.test.ts; nothing is
-// mocked here. run() is only imported in-process for the one case a child process
-// cannot express: an interactive (TTY) stdin.
-
 const root = fileURLToPath(new URL("..", import.meta.url));
 const cli = join(root, "dist", "cli.js");
 const suite = join(root, "test", "fixtures", "suite");
@@ -116,10 +112,6 @@ describe("history", () => {
     expect(readFileSync(history, "utf8").trim().split("\n")).toHaveLength(6);
   });
 
-  // Regression: dedup used to key on (test_id, version, timestamp, source_file) only.
-  // In the shipped action.yml flow — same commit, same artifact path, no suite
-  // timestamp — a rerun that flipped pass->fail was indistinguishable from a
-  // re-upload and got discarded, so within_version_flips could never fire.
   it("keeps a rerun that flipped outcome on the same commit and artifact path", () => {
     const dir = tmp();
     const history = join(dir, "history.jsonl");
@@ -163,6 +155,18 @@ describe("ci", () => {
     expect(runCli(["ci", suite, "--commit", "v1", "--fail-above", "0.6"]).status).toBe(0);
   });
 
+  it("fails only for unbaselined breaches when another test matches its ceiling", () => {
+    const baseline = join(tmp(), "baseline.json");
+    const known = { test_id: "checkout > applies promo code", gating_score: 0.5 };
+    writeFileSync(baseline, JSON.stringify({ schema_version: 2, tests: [known] }));
+    const { status, stdout, stderr } = runCli([
+      "ci", suite, "--commit", "v1", "--baseline", baseline, "--fail-above", "0.1", "--json",
+    ]);
+    expect(status).toBe(1);
+    expect(JSON.parse(stdout)).toMatchObject({ baselined_breaches: [known] });
+    expect(stderr).toContain("1 test(s) above --fail-above 0.1 (by gating_score):\n  checkout > syncs inventory");
+  });
+
   it("emits ::warning annotations and a job summary with --format github", () => {
     const summaryFile = join(tmp(), "summary.md");
     const { stdout } = runCli(
@@ -175,8 +179,6 @@ describe("ci", () => {
     expect(summary).toContain("| 1 | `checkout > applies promo code` | 1.000 |");
   });
 
-  // Regression: an unwritable $GITHUB_STEP_SUMMARY threw out of the run and failed
-  // the whole step; the job summary is cosmetic, so it must only warn.
   it("warns instead of failing when $GITHUB_STEP_SUMMARY cannot be written", () => {
     const { status, stdout, stderr } = runCli(
       ["ci", suite, "--commit", "v1", "--format", "github"],
@@ -187,8 +189,6 @@ describe("ci", () => {
     expect(stderr).toContain("GITHUB_STEP_SUMMARY");
   });
 
-  // Regression: annotations used to go to stdout unconditionally, so combining the
-  // two documented ci flags left stdout as JSON followed by ::warning lines.
   it("keeps stdout parseable when --json and --format github are combined", () => {
     const summaryFile = join(tmp(), "summary.md");
     const { stdout, stderr } = runCli(
@@ -235,7 +235,6 @@ describe("exit code 2 (usage and input errors)", () => {
     expect(status).toBe(2);
   });
 
-  // Regression: the no-command usage text went to stdout while exiting 2.
   it("sends the no-command usage error to stderr, leaving stdout clean", () => {
     const { status, stdout, stderr } = runCli([]);
     expect(status).toBe(2);

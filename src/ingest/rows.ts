@@ -1,5 +1,5 @@
 import { validExecutionId, type RunRecord } from "../score.js";
-import { cleanTestId, firstValue, normalizeResult, numberOrNull, stripBom } from "./common.js";
+import { cleanTestId, firstValue, isRecord, normalizeResult, numberOrNull, stripBom } from "./common.js";
 
 /** Minimal RFC4180-ish CSV reader (quotes, embedded commas/newlines, CRLF). */
 export function parseCsv(text: string): Record<string, string>[] {
@@ -51,14 +51,10 @@ const DURATION_KEYS = ["duration_s", "duration", "elapsed"];
 const MESSAGE_KEYS = ["failure_message", "message", "error"];
 const VERSION_KEYS = ["version"] as const;
 
-/**
- * Every key `runsFromRows` consumes. Anything else on a history line is a field
- * this version does not know about and must survive a merge/prune rewrite untouched.
- */
 export const CONSUMED_ROW_KEYS: ReadonlySet<string> = new Set([
   ...TEST_ID_KEYS,
   ...RESULT_KEYS,
-  "version",
+  ...VERSION_KEYS,
   ...TIMESTAMP_KEYS,
   ...DURATION_KEYS,
   ...MESSAGE_KEYS,
@@ -89,21 +85,17 @@ function buildRun(
     failure_message: typeof failureMessage === "string" ? failureMessage : null,
     source_file: typeof sourceFile === "string" ? sourceFile : fallbackFile,
   };
-  // Kept only when present, so v1 history lines round-trip byte-identically.
   if (attempt !== null) run.attempt = attempt;
   if (executionId !== null) run.execution_id = executionId;
   return run;
 }
 
-/** Normalize one alias-bearing row, using the canonical history shape as a fast path. */
 export function runFromRow(
-  raw: unknown,
+  row: unknown,
   fallbackFile: string | null,
   fallbackVersion: string | null,
 ): RunRecord | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  // SAFETY: the guard above excludes null, primitives, and arrays.
-  const row = raw as Record<string, unknown>;
+  if (!isRecord(row)) return null;
 
   const canonicalTestId = row["test_id"];
   const canonicalResult = row["result"];
@@ -125,7 +117,6 @@ export function runFromRow(
   return cleanId === "" ? null : buildRun(row, cleanId, result, fallbackFile, fallbackVersion);
 }
 
-/** Normalize alias-bearing row objects (from JSON or CSV) into runs. */
 export function runsFromRows(
   rows: unknown[],
   fallbackFile: string | null,

@@ -1,13 +1,15 @@
 import { renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { relative, sep } from "node:path";
 
-/** Usage / input error — the CLI maps this to exit code 2. */
 export class InputError extends Error {}
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
 const PASS_VALUES = new Set(["pass", "passed", "p", "ok", "success", "true", "1", "green"]);
 const FAIL_VALUES = new Set(["fail", "failed", "f", "error", "failure", "false", "0", "red"]);
 
-/** Map a raw result cell to true (pass), false (fail), or null (unusable). */
 export function normalizeResult(raw: unknown): boolean | null {
   if (raw === null || raw === undefined) return null;
   const value = String(raw).trim().toLowerCase();
@@ -16,7 +18,6 @@ export function normalizeResult(raw: unknown): boolean | null {
   return null;
 }
 
-/** First aliased value that is present and non-blank (keeps 0 / false). */
 export function firstValue(row: Record<string, unknown>, keys: readonly string[]): unknown {
   for (const key of keys) {
     if (!(key in row)) continue;
@@ -30,27 +31,14 @@ export function firstValue(row: Record<string, unknown>, keys: readonly string[]
 
 export const stripBom = (text: string) => (text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
 
-/**
- * Collapse control/format characters in a test id to a space.
- *
- * A test name is attacker-supplied text that ends up on every output stream. A
- * newline inside one turns the report into forged GitHub Actions workflow
- * commands: `name="x&#10;::error title=..."` renders as its own `::error` line,
- * which the runner executes. Bidi/zero-width format characters likewise let one
- * id impersonate another in a PR comment. XML attribute-value normalization
- * mandates this collapse anyway, so it also makes JUnit ids spec-correct.
- */
+// Prevent test IDs from forging workflow commands or impersonating other IDs.
 export const cleanTestId = (raw: string): string =>
   raw.replace(/[\p{Cc}\p{Cf}\u2028\u2029]+/gu, " ").trim();
 
-/**
- * Path relative to `base` (default cwd) with posix separators. This IS the dedup
- * identity for `source_file`: storage (load), comparison (history) and glob
- * matching must all use the same formula or the double-counting bug returns.
- */
 const REL_POSIX_CACHE_LIMIT = 65_536;
 const relPosixCache = new Map<string, string>();
 
+// Keep source-file identities stable across checkouts and platforms.
 export function relPosix(file: string, base = process.cwd()): string {
   const cacheKey = `${base}\u0000${file}`;
   const cached = relPosixCache.get(cacheKey);
@@ -62,15 +50,9 @@ export function relPosix(file: string, base = process.cwd()): string {
   return result;
 }
 
-/**
- * The one test-id format: non-empty parts joined with " > ", control characters
- * collapsed. Every producer (JUnit, Playwright JSON, the reporter) must build ids
- * through this so one history can hold runs from all of them.
- */
 export const joinTestId = (parts: (string | null | undefined)[]): string =>
   cleanTestId(parts.filter(Boolean).join(" > "));
 
-/** The corrupt-history warning every reader owes its caller (SPEC.md). */
 export function warnCorrupt(count: number, where: string): void {
   if (count > 0) process.stderr.write(`warning: skipped ${count} corrupt line(s) in ${where}\n`);
 }
@@ -86,15 +68,7 @@ export type XmlNode = Record<string, unknown>;
 export const asArray = (value: unknown): XmlNode[] =>
   Array.isArray(value) ? (value as XmlNode[]) : value && typeof value === "object" ? [value as XmlNode] : [];
 
-/**
- * tmp + rename: a merge or prune killed mid-write must leave the old history
- * intact rather than a truncated one, and readers never see a partial file.
- *
- * ponytail: no fsync before the rename, and the tmp name is pid-only. Ceiling —
- * a host crash (not a process crash) can still lose the file on filesystems that
- * reorder data against metadata, and two containers sharing a volume can pick the
- * same pid. Upgrade path: fsync the fd before close and add a random suffix.
- */
+// Rename keeps partial writes invisible. Temp paths assume distinct writer PIDs.
 export function writeAtomic(path: string, data: string): void {
   const tmp = `${path}.${process.pid}.tmp`;
   try {
@@ -104,7 +78,7 @@ export function writeAtomic(path: string, data: string): void {
     try {
       unlinkSync(tmp);
     } catch {
-      /* nothing to clean up */
+      // Keep the original write error if cleanup fails.
     }
     throw new InputError(`could not write ${path}: ${(err as Error).message}`);
   }
